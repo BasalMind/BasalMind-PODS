@@ -1,21 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import { evaluatePolicy, recordPresentedReceipt, setupPolicyTables, upsertPolicyGrant, PolicyEditForbidden } from "./policy.js";
-import { SetupBodySchema, PolicyGrantSchema, RequestIdentityHeaderSchema } from "./schemas.js";
-import { getStanding, isBlocked, deriveBanScope, setupStatusCacheTable } from "./registry_authority_status.js";
-
-const MAX_PRESENTED_RECEIPTS = 200; // storage-management cap, not a shape concern -- stays a plain constant, not a Zod schema
-
-// zValidator defaults every failure to 400. Correct for a malformed JSON
-// body (bad request), but a missing/malformed X-Principal-Did is more
-// precisely "you didn't identify yourself" -- 401, matching this route's
-// pre-Zod behavior. Applied only to the header target, not json bodies.
-const identityHeaderHook = (result, c) => {
-  if (!result.success) {
-    return c.json({ error: "X-Principal-Did header is required" }, 401);
-  }
-};
+import { setupPolicyTables, upsertPolicyGrant, PolicyEditForbidden } from "./policy.js";
+import { SetupBodySchema, PolicyGrantSchema } from "./schemas.js";
+import { setupStatusCacheTable } from "./registry_authority_status.js";
+import { createFacetKernel } from "./facet_kernel.js";
 
 // Single source of truth for "which (method, path) pairs exist," consumed
 // by two places that must never drift apart: buildApp()'s Hono
@@ -83,6 +72,20 @@ const KNOWN_ROUTES = [
 export class PodRoot extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
+    // 2026-09-16: requirePolicy()/protectedRoute() extracted into
+    // facet_kernel.js so InventoryFacet (the first real facet DO) can
+    // share this exact logic rather than a second, independently-drifting
+    // copy -- see that file's own doc comment for what this is and isn't.
+    // Bound here, not module-level, since each is scoped to THIS
+    // instance's own sql()/ownerDid() -- behavior-preserving, verified by
+    // this file's own existing test suite (pod-root.test.js,
+    // standing_veto.test.js, worker-entry.test.js) passing unmodified.
+    const kernel = createFacetKernel({
+      sql: (q, ...b) => this.sql(q, ...b),
+      getOwnerDid: () => this.ownerDid(),
+    });
+    this.requirePolicy = kernel.requirePolicy;
+    this.protectedRoute = kernel.protectedRoute;
     this.app = this.buildApp();
   }
 
@@ -184,116 +187,9 @@ export class PodRoot extends DurableObject {
     return rows[0] ? rows[0].owner_did : null;
   }
 
-  // Every protected route composes zValidator('header', RequestIdentityHeaderSchema)
-  // BEFORE this middleware -- header shape (non-empty, length-bounded) is
-  // already guaranteed by the time this runs; this only does the
-  // BUSINESS check (does the policy table permit this). Caller identity
-  // itself is still UNAUTHENTICATED (see module docstring + policy.js) --
-  // this enforces the POLICY decision correctly, it does not and cannot
-  // yet enforce that the caller genuinely controls the DID it claims.
-  //
-  // Standing veto, 2026-09-01 (Jonah, in conversation): every protected
-  // route ALSO checks BasalMind's registry-authority standing for
-  // principalDid, automatically -- a route author cannot forget it,
-  // since it lives here rather than being an opt-in a facet-type author
-  // would need to remember to add. Composed as a PURE VETO against
-  // evaluatePolicy()'s own decision (AND, never OR): the standing check
-  // runs ONLY after policy already said allow, and can only turn that
-  // allow into a deny -- a clean standing record never grants anything a
-  // deny already refused. Deliberately ordered AFTER evaluatePolicy()
-  // (a cheap local SQLite read) rather than before it, so a request the
-  // policy table was always going to deny never pays for the network
-  // round-trip getStanding() may need. context: "new" is used
-  // unconditionally today -- "continuing" (memory's fail-open path for
-  // an already-established interaction) needs relationship-tracking
-  // state this module doesn't have yet; always treating a request as
-  // "new" is the conservative default (fail closed on any endpoint
-  // outage) until that state exists, not a shortcut around it.
-  requirePolicy(action, resource) {
-    return async (c, next) => {
-      const owner = this.ownerDid();
-      if (owner === null) {
-        return c.json({ error: "pod not set up" }, 409);
-      }
-      // Round-2 bounded Fable review, 2026-08-31, finding N1: c.req.valid()
-      // returns undefined if zValidator("header", ...) was never attached
-      // to this route -- previously an unhandled TypeError/500 on the very
-      // copy-paste-a-new-route mistake this coupling exists to catch. Fail
-      // loud in a way that says exactly what's wrong, not a generic 500.
-      // protectedRoute() below now makes this mistake structurally
-      // unrepresentable for any route written through it -- this check
-      // stays as defense in depth for a route that bypasses the helper.
-      const headers = c.req.valid("header");
-      if (!headers) {
-        throw new Error(
-          `requirePolicy("${action}", "${resource}") was reached without zValidator("header", ` +
-          `RequestIdentityHeaderSchema) attached to the same route first -- this is a route-wiring ` +
-          `bug, not a caller error.`
-        );
-      }
-      const principalDid = headers["x-principal-did"];
-      const receiptScope = headers["x-presented-receipt-scope"];
-      if (receiptScope) {
-        // Provenance only -- see policy.js. This line is the entire
-        // extent to which a presented receipt participates in this
-        // request; it is never read by evaluatePolicy() below. maxRows
-        // prunes unboundedly-growing storage (bounded Fable review,
-        // 2026-08-31, finding 3) -- length is already bounded by the
-        // header schema above.
-        recordPresentedReceipt((q, ...b) => this.sql(q, ...b), principalDid, receiptScope, MAX_PRESENTED_RECEIPTS);
-      }
-      const result = evaluatePolicy((q, ...b) => this.sql(q, ...b), { ownerDid: owner, principalDid, action, resource });
-      if (result.decision !== "allow") {
-        return c.json({ error: "forbidden", reason: result.reason }, 403);
-      }
-
-      const isOwner = principalDid === owner;
-      const banScope = deriveBanScope(action, isOwner);
-      // principalDid is passed directly as getStanding()'s podDid -- by
-      // design, not a mismatch: this whole system is one did:webvh
-      // identity per person, and pod_did in pod_binding_certificates IS
-      // that same identity DID (Phase 2 decision, confirmed by Jonah:
-      // "Identity is per-person... pod_did should map to the PERSON's
-      // one identity"). Opus review, 2026-09-01, correctly flagged the
-      // REAL residual risk here: principalDid is still self-asserted
-      // (unverified) at this point in the request -- the already-named,
-      // already-documented caller-identity gap (module doc comment,
-      // above, and pod_did_verifier.py's own module doc). This standing
-      // check is only as trustworthy as that unverified claim; it is
-      // advisory, not authoritative, until request-signature
-      // verification lands on top of it.
-      const standing = await getStanding((q, ...b) => this.sql(q, ...b), principalDid, { context: "new" });
-      if (isBlocked(standing, banScope)) {
-        return c.json({ error: "forbidden", reason: `standing-restricted:${banScope}` }, 403);
-      }
-
-      c.set("principalDid", principalDid);
-      c.set("isOwner", isOwner);
-      await next();
-    };
-  }
-
-  // Fused header-validation + policy-check registration -- Fable
-  // architecture review, 2026-08-31: the round-2 runtime tripwire in
-  // requirePolicy() above is a symptom, not a fix; the real fix is making
-  // "policy-gated route missing its header validator" impossible to
-  // write, not just loud when written wrong. Every future facet route
-  // that needs owner/policy gating should go through this, not assemble
-  // the three-part chain by hand. bodySchema is optional (GET routes have
-  // none); when present it's validated AFTER the policy check succeeds,
-  // matching this session's own established ordering (cheapest/most-
-  // foundational rejection first -- identity shape, then authorization,
-  // then body shape).
-  protectedRoute(app, method, path, action, resource, handler, bodySchema) {
-    const middlewares = [
-      zValidator("header", RequestIdentityHeaderSchema, identityHeaderHook),
-      this.requirePolicy(action, resource),
-    ];
-    if (bodySchema) {
-      middlewares.push(zValidator("json", bodySchema));
-    }
-    app[method](path, ...middlewares, handler);
-  }
+  // requirePolicy()/protectedRoute() now live in facet_kernel.js, bound to
+  // this instance in the constructor above -- see that file for the full
+  // behavior and its own doc comment for why this moved.
 
   buildApp() {
     const app = new Hono();
