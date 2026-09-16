@@ -5,10 +5,12 @@
   "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
     "bindings": [
-      { "name": "POD_ROOT", "class_name": "PodRoot" }
+      { "name": "POD_ROOT", "class_name": "PodRoot" },
+      { "name": "INVENTORY_FACET", "class_name": "InventoryFacet" }
     ]
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["PodRoot"] }
+    { "tag": "v1", "new_sqlite_classes": ["PodRoot"] },
+    { "tag": "v2", "new_sqlite_classes": ["InventoryFacet"] }
   ]
 }

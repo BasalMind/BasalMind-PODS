@@ -36,3 +36,44 @@ describe("top-level Worker entry -- KNOWN_ROUTES cheap-reject", () => {
     expect(res.status).toBe(404);
   });
 });
+
+// Added alongside InventoryFacet (2026-09-16): KNOWN_ROUTES' `binding`
+// field is what lets the Worker route /inventory/* to a DIFFERENT DO
+// namespace than PodRoot's own routes -- a typo in either KNOWN_ROUTES
+// or InventoryFacet's own Hono registrations would silently 404 a route
+// that should work, with green CI (nothing else exercises the
+// TOP-LEVEL Worker entry for these paths -- inventory-facet.test.js
+// only calls env.INVENTORY_FACET stubs directly, bypassing KNOWN_ROUTES
+// entirely). This is the drift check that closes that gap.
+describe("top-level Worker entry -- INVENTORY_FACET routing", () => {
+  it("every /inventory/* route in KNOWN_ROUTES reaches InventoryFacet, not a 404 from the cheap-reject or a typo'd Hono path", async () => {
+    const owner = "did:webvh:owner-scid:example.com:persons:worker-entry-inventory";
+    // Bootstrap via the real path (PodRoot /setup -> RPC), same as
+    // production -- this pod is unique to this test file/id, so it
+    // doesn't collide with inventory-facet.test.js's own facet content.
+    await SELF.fetch("http://pod/setup", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ owner_did: owner }),
+    });
+
+    const cases = [
+      { method: "POST", path: "/inventory/items", body: { sku: "WE-SKU-1", label: "x" } },
+      { method: "GET", path: "/inventory/items" },
+      { method: "POST", path: "/inventory/items/update", body: { sku: "WE-SKU-1", label: "y" } },
+      { method: "POST", path: "/inventory/movements", body: { sku: "WE-SKU-1", kind: "receipt", quantity_delta: 1, idempotency_key: "we-k1" } },
+      { method: "GET", path: "/inventory/balances" },
+      { method: "GET", path: "/inventory/alerts/low-stock" },
+      { method: "POST", path: "/inventory/policy/grants", body: { grant_id: "we-g1", principal_did: "did:webvh:x:example.com:persons:y", action: "inventory_item.read", resource: "inventory_item", effect: "allow", expires_at: null } },
+    ];
+    for (const { method, path, body } of cases) {
+      const res = await SELF.fetch(`http://pod${path}`, {
+        method,
+        headers: { "content-type": "application/json", "X-Principal-Did": owner },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      expect(res.status, `${method} ${path} should not 404`).not.toBe(404);
+      await res.json(); // drain the body -- see inventory-facet.test.js's eviction test for why
+    }
+  });
+});
