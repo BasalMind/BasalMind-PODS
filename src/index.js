@@ -5,6 +5,13 @@ import { setupPolicyTables, upsertPolicyGrant, PolicyEditForbidden } from "./pol
 import { SetupBodySchema, PolicyGrantSchema } from "./schemas.js";
 import { setupStatusCacheTable } from "./registry_authority_status.js";
 import { createFacetKernel } from "./facet_kernel.js";
+import { InventoryFacet } from "./facets/inventory/index.js";
+
+// Re-exported so wrangler's durable_objects binding for INVENTORY_FACET
+// (wrangler.jsonc) can resolve the class from this file, the Worker's
+// declared `main` -- Cloudflare requires every bound DO class to be
+// reachable from the main module, same as PodRoot below.
+export { InventoryFacet };
 
 // Single source of truth for "which (method, path) pairs exist," consumed
 // by two places that must never drift apart: buildApp()'s Hono
@@ -15,11 +22,23 @@ import { createFacetKernel } from "./facet_kernel.js";
 // the DO and billed the customer's account before a 404 ever fired, same
 // defect class (billing-relevant work on unauthenticated input) as the
 // receipt-table DoS a prior review already closed at a different layer.
+//
+// `binding` added 2026-09-16 alongside InventoryFacet, the first route
+// set that isn't PodRoot's own -- routes are only ever forwarded, never
+// path-rewritten (see InventoryFacet.buildApp()'s own note on why its
+// Hono routes are registered at their full "/inventory/..." paths).
 const KNOWN_ROUTES = [
-  { method: "POST", path: "/setup" },
-  { method: "GET", path: "/status" },
-  { method: "POST", path: "/policy/grants" },
-  { method: "GET", path: "/facets" },
+  { method: "POST", path: "/setup", binding: "POD_ROOT" },
+  { method: "GET", path: "/status", binding: "POD_ROOT" },
+  { method: "POST", path: "/policy/grants", binding: "POD_ROOT" },
+  { method: "GET", path: "/facets", binding: "POD_ROOT" },
+  { method: "POST", path: "/inventory/items", binding: "INVENTORY_FACET" },
+  { method: "POST", path: "/inventory/items/update", binding: "INVENTORY_FACET" },
+  { method: "GET", path: "/inventory/items", binding: "INVENTORY_FACET" },
+  { method: "POST", path: "/inventory/movements", binding: "INVENTORY_FACET" },
+  { method: "GET", path: "/inventory/balances", binding: "INVENTORY_FACET" },
+  { method: "GET", path: "/inventory/alerts/low-stock", binding: "INVENTORY_FACET" },
+  { method: "POST", path: "/inventory/policy/grants", binding: "INVENTORY_FACET" },
 ];
 
 // Pod root: the pod's one stable, addressable entry point. Holds routing
@@ -132,6 +151,15 @@ export class PodRoot extends DurableObject {
         new Date().toISOString(),
       );
     }
+
+    // Resolve the real owner regardless of whether this was a first-time
+    // or idempotent repeat call, then bootstrap every registered facet
+    // with it -- InventoryFacet.setup() needs a real owner DID even when
+    // this /setup call itself omitted one (the idempotent-repeat case
+    // pod-root.test.js already covers for pod_meta itself).
+    const owner = [...this.sql(`SELECT owner_did FROM pod_meta WHERE singleton = 1;`)][0].owner_did;
+    await this.setupInventoryFacet(owner);
+
     // Deliberately NOT this.status() -- see that method's own comment.
     // /setup's response goes only to the caller who just performed setup
     // (or is re-confirming an already-set-up pod), so echoing owner_did
@@ -139,6 +167,25 @@ export class PodRoot extends DurableObject {
     // repeatable, unauthenticated disclosure /status was leaking.
     const meta = [...this.sql(`SELECT pod_id, protocol_version, owner_did, created_at FROM pod_meta WHERE singleton = 1;`)][0];
     return { ok: true, pod: meta };
+  }
+
+  // Calls InventoryFacet.setup() via Workers RPC -- a DurableObject
+  // subclass's public methods are callable directly on its own stub
+  // (env.INVENTORY_FACET.get(id)), not just fetch() -- so a facet never
+  // needs a separate onboarding step of its own; setting up the pod sets
+  // up every registered facet with it. Idempotent (both this insert and
+  // InventoryFacet.setup() itself), safe to call on every /setup hit, not
+  // just the first-time one.
+  async setupInventoryFacet(ownerDid) {
+    const id = this.env.INVENTORY_FACET.idFromName("inventory");
+    const stub = this.env.INVENTORY_FACET.get(id);
+    await stub.setup(ownerDid);
+    this.sql(
+      `INSERT INTO facet_directory (facet_id, facet_profile, profile_version, label, service_path, visibility, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (facet_id) DO NOTHING;`,
+      "inventory", "inventory-v0", "v0", "Inventory", "/inventory", "private", new Date().toISOString(),
+    );
   }
 
   // Bounded Fable review, 2026-08-31, finding 1: /status is deliberately
@@ -268,9 +315,14 @@ export default {
   // the receipt-table write path inside the DO, one layer further out.
   async fetch(request, env) {
     const url = new URL(request.url);
-    const known = KNOWN_ROUTES.some((r) => r.method === request.method && r.path === url.pathname);
-    if (!known) {
+    const route = KNOWN_ROUTES.find((r) => r.method === request.method && r.path === url.pathname);
+    if (!route) {
       return _NOT_FOUND();
+    }
+    if (route.binding === "INVENTORY_FACET") {
+      const id = env.INVENTORY_FACET.idFromName("inventory");
+      const stub = env.INVENTORY_FACET.get(id);
+      return stub.fetch(request);
     }
     const id = env.POD_ROOT.idFromName("pod-root");
     const stub = env.POD_ROOT.get(id);

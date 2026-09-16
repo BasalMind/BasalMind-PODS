@@ -29,8 +29,11 @@
 // long), not cryptographic validity.
 import { z } from "zod/mini";
 
-const DidString = () => z.string().check(z.minLength(1), z.maxLength(2048));
-const NonEmptyString = () => z.string().check(z.minLength(1), z.maxLength(512));
+// Exported (2026-09-16) so a real facet type (InventoryFacet, first one
+// built) can reuse these instead of duplicating two one-line helpers --
+// same shape rules, one definition.
+export const DidString = () => z.string().check(z.minLength(1), z.maxLength(2048));
+export const NonEmptyString = () => z.string().check(z.minLength(1), z.maxLength(512));
 
 export const SetupBodySchema = z._default(
   z.optional(
