@@ -22,11 +22,9 @@
 //
 // Not attempting real did:webvh structural validation here (SCID/hash-
 // chain/pre-rotation) -- that's BasalTribe/basaltribe/pod_did_verifier.py
-// on the server side; a DID string arriving at this Worker is trusted-as-
-// asserted regardless of how well-formed it looks, per the same named
-// caller-identity gap policy.js's own module doc comment describes. This
-// schema only guards against obviously-wrong shapes (empty, absurdly
-// long), not cryptographic validity.
+// on the server side. This schema only guards against obviously-wrong
+// shapes (empty, absurdly long); cryptographic caller identity is the
+// signed-request layer's job (signed_request.js), not this file's.
 import { z } from "zod/mini";
 
 // Exported (2026-09-16) so a real facet type (InventoryFacet, first one
@@ -34,15 +32,6 @@ import { z } from "zod/mini";
 // same shape rules, one definition.
 export const DidString = () => z.string().check(z.minLength(1), z.maxLength(2048));
 export const NonEmptyString = () => z.string().check(z.minLength(1), z.maxLength(512));
-
-export const SetupBodySchema = z._default(
-  z.optional(
-    z.object({
-      owner_did: z.optional(DidString()),
-    }),
-  ),
-  {},
-);
 
 export const PolicyGrantSchema = z.object({
   grant_id: NonEmptyString(),
@@ -58,10 +47,30 @@ export const PolicyGrantSchema = z.object({
   // contract exactly (bounded review empirically confirmed this, not
   // assumed from zod/mini's docs alone).
   expires_at: z.nullable(z.iso.datetime({ precision: 3 })),
+  // Optional row predicate (S1): a structured equality on ONE column,
+  // never SQL text. Omitted or null = the grant covers every row. The
+  // column name is checked against the target table's allowlist when the
+  // predicate is applied (scoped_query.js), so a grant naming a column the
+  // table does not have matches nothing rather than widening access.
+  row_predicate: z.optional(
+    z.nullable(
+      z.object({
+        column: z.string().check(z.regex(/^[a-z_][a-z0-9_]*$/), z.maxLength(64)),
+        equals: z.union([z.string().check(z.maxLength(512)), z.int()]),
+      }),
+    ),
+  ),
 });
 
 // Header names as Hono's own validator target sees them (lowercased).
-export const RequestIdentityHeaderSchema = z.object({
-  "x-principal-did": DidString(),
+// These carry a SIGNED request (signed_request.js), not an asserted
+// identity: shape is checked here, the signature itself is verified in
+// facet_kernel.js's requirePolicy(). The old x-principal-did header is
+// gone (BL#18122) and nothing reads it.
+export const RequestAuthHeaderSchema = z.object({
+  "x-bm-principal": DidString(),
+  "x-bm-timestamp": NonEmptyString(),
+  "x-bm-nonce": NonEmptyString(),
+  "x-bm-signature": NonEmptyString(),
   "x-presented-receipt-scope": z.optional(NonEmptyString()),
 });

@@ -22,6 +22,7 @@ import { setupPolicyTables, upsertPolicyGrant, PolicyEditForbidden } from "../..
 import { PolicyGrantSchema } from "../../schemas.js";
 import { setupStatusCacheTable } from "../../registry_authority_status.js";
 import { createFacetKernel } from "../../facet_kernel.js";
+import { dumpTables } from "../../export.js";
 import { InventoryItemCreateSchema, InventoryItemUpdateSchema, MovementSchema } from "./schemas.js";
 import { applyMovement, evaluateReorderAlerts, UnknownSku, IdempotencyKeyCollision } from "./ledger.js";
 
@@ -32,6 +33,28 @@ import { applyMovement, evaluateReorderAlerts, UnknownSku, IdempotencyKeyCollisi
 // stock with no movement recorded) -- not on any customer-facing latency
 // path.
 const REORDER_ALARM_INTERVAL_MS = 60 * 60 * 1000;
+
+// Tables the scoped-query choke point may touch for NON-owner principals
+// (scoped_query.js). A grant's row predicate may name only these columns of
+// its own resource's table.
+const INVENTORY_TABLES = {
+  inventory_item: {
+    pk: "sku",
+    columns: ["sku", "label", "supplier_vendor_key", "reorder_threshold", "reorder_quantity", "unit_cost_minor", "created_at", "updated_at"],
+  },
+  inventory_movement: {
+    pk: "movement_seq",
+    columns: ["movement_seq", "sku", "kind", "quantity_delta", "idempotency_key", "recorded_by", "recorded_at"],
+  },
+  inventory_balance: {
+    pk: "sku",
+    columns: ["sku", "quantity_on_hand", "last_movement_seq", "updated_at"],
+  },
+  inventory_reorder_alert: {
+    pk: "sku",
+    columns: ["sku", "status", "opened_at", "cleared_at"],
+  },
+};
 
 export class InventoryFacet extends DurableObject {
   constructor(ctx, env) {
@@ -49,10 +72,31 @@ export class InventoryFacet extends DurableObject {
     const kernel = createFacetKernel({
       sql: (q, ...b) => this.sql(q, ...b),
       getOwnerDid: () => this.ownerDid(),
+      // Authentication happens in PodRoot (it holds the owner's DID log and
+      // the replay cache); this facet asks it over Workers RPC on every
+      // request. Pod root is the fixed "pod-root" singleton the Worker entry
+      // also uses.
+      verifyRequest: (desc) =>
+        this.env.POD_ROOT.get(this.env.POD_ROOT.idFromName("pod-root")).verifyRequest(desc),
+      tables: INVENTORY_TABLES,
     });
     this.requirePolicy = kernel.requirePolicy;
     this.protectedRoute = kernel.protectedRoute;
     this.app = this.buildApp();
+    // Lazy self-init from the OWNER_DID binding (S1), single-flight. PodRoot
+    // still drives setup() on its own first boot; this just means the facet
+    // can never be left owner-less if it is reached first.
+    ctx.blockConcurrencyWhile(async () => {
+      if (this.ownerDid() === null && typeof env.OWNER_DID === "string" && env.OWNER_DID.startsWith("did:")) {
+        await this.setup(env.OWNER_DID);
+      }
+    });
+  }
+
+  // Read-only dump for PodRoot's GET /export (export.js). Reachable only
+  // through a Worker binding, never over HTTP.
+  exportTables() {
+    return dumpTables((q, ...b) => this.sql(q, ...b));
   }
 
   sql(query, ...bindings) {
@@ -188,68 +232,62 @@ export class InventoryFacet extends DurableObject {
     // must match the public path exactly.
     this.protectedRoute(app, "post", "/inventory/items", "inventory_item.write", "inventory_item", async (c) => {
       const body = c.req.valid("json");
+      const scoped = c.get("scoped");
       const now = new Date().toISOString();
       try {
-        this.sql(
-          `INSERT INTO inventory_item (sku, label, supplier_vendor_key, reorder_threshold, reorder_quantity, unit_cost_minor, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
-          body.sku, body.label, body.supplier_vendor_key ?? null,
-          body.reorder_threshold ?? 0, body.reorder_quantity ?? 0, body.unit_cost_minor ?? 0,
-          now, now,
-        );
+        scoped.insert("inventory_item", {
+          sku: body.sku,
+          label: body.label,
+          supplier_vendor_key: body.supplier_vendor_key ?? null,
+          reorder_threshold: body.reorder_threshold ?? 0,
+          reorder_quantity: body.reorder_quantity ?? 0,
+          unit_cost_minor: body.unit_cost_minor ?? 0,
+          created_at: now,
+          updated_at: now,
+        });
       } catch (err) {
         if (String(err.message || err).includes("UNIQUE")) {
           return c.json({ error: `sku ${JSON.stringify(body.sku)} already exists` }, 409);
         }
         throw err;
       }
-      // Deliberately NOT evaluating reorder alerts here -- creating an
-      // item is not a movement. A newly-created item with a nonzero
-      // reorder_threshold and no stock ever recorded is exactly the
-      // "threshold set with no movement" case the alarm sweep exists
-      // for, same as the update route below -- not duplicated here.
-      const item = [...this.sql(`SELECT * FROM inventory_item WHERE sku = ?;`, body.sku)][0];
+      // Read back through the same scoped handle: the row just written is,
+      // by the insert's own guard, inside this principal's scope.
+      const item = scoped.select("inventory_item", { where: `"sku" = ?`, params: [body.sku] })[0];
       return c.json({ ok: true, item }, 201);
     }, InventoryItemCreateSchema);
 
     this.protectedRoute(app, "post", "/inventory/items/update", "inventory_item.write", "inventory_item", async (c) => {
       const body = c.req.valid("json");
-      const existing = [...this.sql(`SELECT sku FROM inventory_item WHERE sku = ?;`, body.sku)][0];
-      if (!existing) {
+      const scoped = c.get("scoped");
+      // Same semantics as before the scoped-query refactor: omitted numeric
+      // fields and label keep their value; supplier_vendor_key is set to
+      // exactly what was sent (null when omitted).
+      const changes = { supplier_vendor_key: body.supplier_vendor_key ?? null, updated_at: new Date().toISOString() };
+      for (const col of ["label", "reorder_threshold", "reorder_quantity", "unit_cost_minor"]) {
+        if (body[col] !== undefined && body[col] !== null) changes[col] = body[col];
+      }
+      if (!scoped.update("inventory_item", body.sku, changes)) {
         return c.json({ error: `no inventory_item with sku ${JSON.stringify(body.sku)}` }, 404);
       }
-      const now = new Date().toISOString();
-      this.sql(
-        `UPDATE inventory_item SET
-           label = COALESCE(?, label),
-           supplier_vendor_key = ?,
-           reorder_threshold = COALESCE(?, reorder_threshold),
-           reorder_quantity = COALESCE(?, reorder_quantity),
-           unit_cost_minor = COALESCE(?, unit_cost_minor),
-           updated_at = ?
-         WHERE sku = ?;`,
-        body.label ?? null, body.supplier_vendor_key ?? null,
-        body.reorder_threshold ?? null, body.reorder_quantity ?? null, body.unit_cost_minor ?? null,
-        now, body.sku,
-      );
-      // Deliberately NOT evaluating reorder alerts here -- raising
-      // reorder_threshold above current stock with no movement recorded
-      // is exactly the edge case this facet's alarm() sweep exists to
-      // catch (see this class's own doc comment and the plan's
-      // "Reorder detection" section); evaluating it here would just be a
-      // second, redundant path to the same result the alarm already
-      // guarantees within one sweep interval.
-      const item = [...this.sql(`SELECT * FROM inventory_item WHERE sku = ?;`, body.sku)][0];
+      const item = scoped.select("inventory_item", { where: `"sku" = ?`, params: [body.sku] })[0];
       return c.json({ ok: true, item });
     }, InventoryItemUpdateSchema);
 
     this.protectedRoute(app, "get", "/inventory/items", "inventory_item.read", "inventory_item", async (c) => {
-      const items = [...this.sql(`SELECT * FROM inventory_item ORDER BY sku;`)];
+      const items = c.get("scoped").select("inventory_item", { orderBy: "sku" });
       return c.json({ items });
     });
 
     this.protectedRoute(app, "post", "/inventory/movements", "inventory_movement.write", "inventory_movement", async (c) => {
       const body = c.req.valid("json");
+      // The ledger (ledger.js) is a multi-statement write procedure that
+      // also maintains inventory_balance, so it cannot be expressed as one
+      // scoped insert. It runs only AFTER the scoped-query choke point has
+      // approved the candidate movement row for this principal's grant;
+      // a predicate on a column the movement body does not carry fails
+      // closed (ScopeDenied -> 403).
+      c.get("scoped").guardRow("inventory_movement", { sku: body.sku, kind: body.kind });
       let result;
       try {
         result = this.ctx.storage.transactionSync(() =>
@@ -280,12 +318,12 @@ export class InventoryFacet extends DurableObject {
     }, MovementSchema);
 
     this.protectedRoute(app, "get", "/inventory/balances", "inventory_balance.read", "inventory_balance", async (c) => {
-      const balances = [...this.sql(`SELECT * FROM inventory_balance ORDER BY sku;`)];
+      const balances = c.get("scoped").select("inventory_balance", { orderBy: "sku" });
       return c.json({ balances });
     });
 
     this.protectedRoute(app, "get", "/inventory/alerts/low-stock", "inventory_reorder_alert.read", "inventory_reorder_alert", async (c) => {
-      const alerts = [...this.sql(`SELECT * FROM inventory_reorder_alert WHERE status = 'open' ORDER BY sku;`)];
+      const alerts = c.get("scoped").select("inventory_reorder_alert", { where: `"status" = 'open'`, orderBy: "sku" });
       return c.json({ alerts });
     });
 
@@ -305,6 +343,7 @@ export class InventoryFacet extends DurableObject {
           resource: body.resource,
           effect: body.effect,
           expiresAt: body.expires_at,
+          rowPredicate: body.row_predicate ?? null,
         });
         return c.json({ ok: true });
       } catch (err) {

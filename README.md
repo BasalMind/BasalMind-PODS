@@ -40,14 +40,20 @@ before this becomes the production pod-launch flow.
      (`dash.cloudflare.com/profile/api-tokens`), scoped at minimum to Workers Scripts: Edit.
    - `CLOUDFLARE_ACCOUNT_ID` -- your own Cloudflare account ID (visible on the Cloudflare
      dashboard's right sidebar for any zone, or via `wrangler whoami`).
-3. Go to your repo's **Actions** tab, select **Setup Pod**, and click **Run workflow**.
+3. Go to your repo's **Actions** tab, select **Setup Pod**, and click **Run workflow**. Enter
+   your pod's DID in the `owner_did` field: it is bound to the Worker as `OWNER_DID` and becomes
+   the pod's immutable owner on first boot.
    (If this is a fork rather than a template-generated copy, GitHub disables Actions on forks by
    default -- there's a one-time "I understand my workflows, go ahead and enable them" banner to
    click first.)
 4. The workflow deploys `src/index.js` to a Worker in your own account. Its `*.workers.dev` URL
    is printed in the deploy step's output.
-5. Visit `<your-worker-url>/setup`, then `<your-worker-url>/status` to confirm a real pod-root
-   Durable Object is running and answering.
+5. Visit `<your-worker-url>/status` to confirm a real pod-root Durable Object is running. There
+   is no setup call: the pod initializes itself on first boot from `OWNER_DID` (a second
+   initialization is always rejected), generates its service key inside the Durable Object, and
+   shows only the public key as `service_key` on `/status`. Every other route needs a signed
+   request (see `src/signed_request.js`); the old `POST /setup` and `X-Principal-Did` header no
+   longer exist.
 
 At no point does this repo, this workflow, or BasalMind's own infrastructure receive your
 Cloudflare token -- it lives only in your own repo's GitHub Actions secrets, which GitHub

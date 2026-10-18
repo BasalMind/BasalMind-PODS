@@ -1,5 +1,6 @@
 import { env, runDurableObjectAlarm, evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { describe, it, expect, vi } from "vitest";
+import { OWNER_DID, STRANGER_DID, owner, stranger, signedFetch, freshPod, rejection, freshPodSingleton } from "../../helpers.js";
 
 // Same mock policy.test.js/standing_veto.test.js already use --
 // getStanding() would otherwise make a real network fetch to
@@ -10,8 +11,9 @@ vi.mock("../../../src/registry_authority_status.js", async (importOriginal) => {
   return { ...actual, getStanding: async () => ({ verdict: "active", restricted_scopes: [], source: "mocked-clean" }) };
 });
 
-const OWNER = "did:webvh:owner-scid:example.com:persons:alice";
-const STRANGER = "did:webvh:stranger-scid:example.com:persons:bob";
+const OWNER = OWNER_DID;
+const STRANGER = STRANGER_DID;
+const SIGNERS = { [OWNER]: await owner(), [STRANGER]: await stranger() };
 
 // Each test gets its own INVENTORY_FACET id (mirrors pod-root.test.js/
 // policy.test.js's per-test PodRoot naming) rather than relying on the
@@ -20,6 +22,9 @@ const STRANGER = "did:webvh:stranger-scid:example.com:persons:bob";
 // singleton-per-pod shape, exercised separately below by the
 // PodRoot-bootstrap test, which is the one test that needs it.
 async function freshFacet(name, ownerDid = OWNER) {
+  // Facets authenticate through the pod-root singleton (RPC), which needs
+  // the owner's root key published in its DID log.
+  await freshPodSingleton();
   const id = env.INVENTORY_FACET.idFromName(name);
   const stub = env.INVENTORY_FACET.get(id);
   await stub.setup(ownerDid);
@@ -27,24 +32,13 @@ async function freshFacet(name, ownerDid = OWNER) {
 }
 
 function call(stub, method, path, { principalDid, body } = {}) {
-  const headers = { "content-type": "application/json" };
-  if (principalDid) headers["X-Principal-Did"] = principalDid;
-  return stub.fetch(`http://pod${path}`, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  return signedFetch(stub, principalDid ? SIGNERS[principalDid] : undefined, path, { method, body });
 }
 
 describe("PodRoot -> InventoryFacet DO-to-DO RPC bootstrap", () => {
-  it("PodRoot.setup() provisions InventoryFacet via Workers RPC, not just its own tables", async () => {
-    const podId = env.POD_ROOT.idFromName("rpc-bootstrap-pod");
-    const podStub = env.POD_ROOT.get(podId);
-    await podStub.fetch("http://pod/setup", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ owner_did: OWNER }),
-    });
+  it("PodRoot first boot provisions InventoryFacet via Workers RPC, not just its own tables", async () => {
+    await freshPodSingleton();
+    const podStub = env.POD_ROOT.get(env.POD_ROOT.idFromName("pod-root"));
 
     // Confirm via the facet's OWN fetch surface (not a direct storage
     // peek) that setup() actually ran on the real singleton id PodRoot
@@ -59,49 +53,35 @@ describe("PodRoot -> InventoryFacet DO-to-DO RPC bootstrap", () => {
   });
 
   it("facet_directory records the private inventory facet -- confirmed via the owner-only /facets route", async () => {
-    const podId = env.POD_ROOT.idFromName("rpc-bootstrap-directory");
-    const podStub = env.POD_ROOT.get(podId);
-    await podStub.fetch("http://pod/setup", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ owner_did: OWNER }),
-    });
-    const res = await podStub.fetch("http://pod/facets", { headers: { "X-Principal-Did": OWNER } });
+    const podStub = await freshPod("rpc-bootstrap-directory");
+    const res = await call(podStub, "GET", "/facets", { principalDid: OWNER });
     const body = await res.json();
     const inventory = body.facets.find((f) => f.facet_id === "inventory");
     expect(inventory).toBeTruthy();
     expect(inventory.visibility).toBe("private");
   });
 
-  it("calling PodRoot /setup a second time does not fail or re-provision InventoryFacet incorrectly", async () => {
-    const podId = env.POD_ROOT.idFromName("rpc-bootstrap-idempotent");
-    const podStub = env.POD_ROOT.get(podId);
-    await podStub.fetch("http://pod/setup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ owner_did: OWNER }) });
-    const second = await podStub.fetch("http://pod/setup", { method: "POST" });
-    expect(second.status).toBe(200);
+  it("a second init of PodRoot is rejected and does not re-provision InventoryFacet", async () => {
+    const podStub = await freshPod("rpc-bootstrap-idempotent");
+    expect((await rejection(podStub.init()))?.message).toMatch(/already initialized/);
+    const res = await call(podStub, "GET", "/facets", { principalDid: OWNER });
+    expect(res.status).toBe(200);
   });
 
-  it("a repeat /setup with a DIFFERENT owner_did cannot re-root the facet's authorization -- the security property the policy layer rests on, now spanning two DOs", async () => {
+  it("a later facet setup() with a DIFFERENT owner cannot re-root the facet's authorization -- the security property the policy layer rests on, now spanning two DOs", async () => {
     const IMPOSTOR = "did:webvh:impostor-scid:example.com:persons:eve";
-    const podId = env.POD_ROOT.idFromName("rpc-bootstrap-owner-immutable");
-    const podStub = env.POD_ROOT.get(podId);
-    await podStub.fetch("http://pod/setup", {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ owner_did: OWNER }),
-    });
-    // PodRoot.setup() only inserts pod_meta when it's empty, and always
-    // re-reads the REAL owner from pod_meta before forwarding it to
-    // InventoryFacet.setup() -- an impostor owner_did in a repeat /setup
-    // body must be silently ignored, not propagated to the facet.
-    await podStub.fetch("http://pod/setup", {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ owner_did: IMPOSTOR }),
-    });
-
+    await freshPodSingleton();
     const facetStub = env.INVENTORY_FACET.get(env.INVENTORY_FACET.idFromName("inventory"));
-    await call(facetStub, "POST", "/inventory/items", { principalDid: OWNER, body: { sku: "SKU-OWNER-CHECK", label: "x" } });
+    // facet_meta is write-once: an impostor owner passed to setup() is ignored.
+    await facetStub.setup(IMPOSTOR);
+
+    expect((await call(facetStub, "POST", "/inventory/items", { principalDid: OWNER, body: { sku: "SKU-OWNER-CHECK", label: "x" } })).status).toBe(201);
     const originalStillOwner = await call(facetStub, "GET", "/inventory/items", { principalDid: OWNER });
     expect(originalStillOwner.status).toBe(200);
-    const impostorDenied = await call(facetStub, "GET", "/inventory/items", { principalDid: IMPOSTOR });
-    expect(impostorDenied.status).toBe(403);
+    expect((await originalStillOwner.json()).items.length).toBe(1);
+    // The impostor holds no key anywhere the pod trusts: unauthenticated, not merely unauthorized.
+    const impostorDenied = await signedFetch(facetStub, await (await import("../../helpers.js")).mallory(IMPOSTOR), "/inventory/items");
+    expect(impostorDenied.status).toBe(401);
   });
 });
 

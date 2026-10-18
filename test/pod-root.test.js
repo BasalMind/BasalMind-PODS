@@ -1,89 +1,67 @@
-import { env } from "cloudflare:test";
+import { env, evictDurableObject } from "cloudflare:test";
 import { describe, it, expect } from "vitest";
+import { OWNER_DID, owner, signedFetch, freshPod, podRootStub, rejection } from "./helpers.js";
 
-const OWNER = "did:webvh:owner-scid:example.com:persons:alice";
+describe("pod-root facet -- first-boot initialization", () => {
+  it("first boot creates pod_meta and facet_directory from the OWNER_DID binding, with no setup call", { timeout: 20000 }, async () => {
+    const stub = await freshPod("boot-creates-meta");
+    const status = await (await stub.fetch("http://pod/status")).json();
+    expect(status.pod.protocol_version).toBe("poc-v0");
+    const podId = status.pod.pod_id;
 
-function setupPod(stub, ownerDid = OWNER) {
-  return stub.fetch("http://pod/setup", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ owner_did: ownerDid }),
-  });
-}
+    // The owner (authenticated by signature) sees the registered facet.
+    const facets = await (await signedFetch(stub, await owner(), "/facets")).json();
+    expect(facets.facets.map((f) => f.facet_id)).toContain("inventory");
 
-describe("pod-root facet", () => {
-  it("setup creates pod_meta and facet_directory, idempotently", async () => {
-    const id = env.POD_ROOT.idFromName("pod-root");
-    const stub = env.POD_ROOT.get(id);
-
-    const first = await (await setupPod(stub)).json();
-    expect(first.ok).toBe(true);
-    expect(first.pod.protocol_version).toBe("poc-v0");
-    expect(first.pod.owner_did).toBe(OWNER);
-    const podId = first.pod.pod_id;
-
-    // Idempotent: calling /setup again must not mint a second pod_id, and
-    // must not require (or accept a change of) owner_did on repeat calls.
-    const second = await (await setupPod(stub, "did:webvh:someone-else:example.com")).json();
-    expect(second.pod.pod_id).toBe(podId);
-    expect(second.pod.owner_did).toBe(OWNER); // unchanged -- setup never re-roots ownership
-
-    const third = await (await stub.fetch("http://pod/setup", { method: "POST" })).json();
-    expect(third.pod.pod_id).toBe(podId); // no body at all is fine once already set up
+    // Eviction re-runs the constructor: first boot must not mint a second pod_id.
+    await evictDurableObject(stub);
+    const again = await (await stub.fetch("http://pod/status")).json();
+    expect(again.pod.pod_id).toBe(podId);
   });
 
-  it("first-time setup with no owner_did is rejected -- there is no owner to root policy on otherwise", async () => {
-    const id = env.POD_ROOT.idFromName("no-owner-check");
-    const stub = env.POD_ROOT.get(id);
-    const res = await stub.fetch("http://pod/setup", { method: "POST" });
-    expect(res.status).toBe(400);
+  it("a second init attempt is rejected -- ownership can never be re-rooted", async () => {
+    const stub = podRootStub("second-init");
+    await stub.fetch("http://pod/status"); // first boot
+    expect((await rejection(stub.init()))?.message).toMatch(/already initialized/);
+    // Still the original owner afterwards: the owner's own log still authenticates.
+    await freshPod("second-init");
+    const res = await signedFetch(stub, await owner(), "/facets");
+    expect(res.status).toBe(200);
+    expect((await res.json()).owner).toBe(true);
   });
 
-  it("status reflects an empty facet directory before any real facet is registered", async () => {
-    const id = env.POD_ROOT.idFromName("status-check");
-    const stub = env.POD_ROOT.get(id);
-    await (await setupPod(stub)).json();
+  it("there is no unauthenticated HTTP setup path on the DO either -- POST /setup is a plain 404", async () => {
+    const stub = podRootStub("no-setup-route");
+    const res = await stub.fetch("http://pod/setup", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ owner_did: "did:webvh:impostor:example.com:persons:eve" }),
+    });
+    expect(res.status).toBe(404);
+    const status = await (await stub.fetch("http://pod/status")).json();
+    expect(status.pod).not.toBeNull(); // initialized, from the binding
+  });
 
+  it("status reflects an empty facet directory before any real facet is registered as listed", async () => {
+    const stub = await freshPod("status-check");
     const status = await (await stub.fetch("http://pod/status")).json();
     expect(status.ok).toBe(true);
     expect(status.facets).toEqual([]);
     expect(status.scope).toMatch(/proof-of-concept/);
   });
 
-  it("/status on a never-set-up pod returns 200 with pod: null, not a raw 500", async () => {
-    // Found writing worker-entry.test.js: pod_meta/facet_directory don't
-    // exist until /setup has run once -- a fresh deploy's very first
-    // /status check (before anyone has run /setup) previously crashed.
-    const id = env.POD_ROOT.idFromName("status-before-setup");
-    const stub = env.POD_ROOT.get(id);
-    const res = await stub.fetch("http://pod/status");
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.ok).toBe(true);
-    expect(body.pod).toBeNull();
-    expect(body.facets).toEqual([]);
-  });
-
   it("an unknown path 404s", async () => {
-    const id = env.POD_ROOT.idFromName("404-check");
-    const stub = env.POD_ROOT.get(id);
+    const stub = podRootStub("404-check");
     const res = await stub.fetch("http://pod/nope");
     expect(res.status).toBe(404);
   });
 
-  it("/status does not disclose owner_did or private facets -- bounded Fable review, 2026-08-31, finding 1", async () => {
-    const id = env.POD_ROOT.idFromName("status-no-disclosure");
-    const stub = env.POD_ROOT.get(id);
-    await setupPod(stub);
+  it("/status does not disclose owner_did or private facets, and exposes only the PUBLIC service key", async () => {
+    const stub = await freshPod("status-no-disclosure");
     const status = await (await stub.fetch("http://pod/status")).json();
     expect(status.pod.owner_did).toBeUndefined();
-    // Confirm the filter is real, not just "no facets exist": seed one
-    // private and one listed facet directly, then check /status only
-    // shows the listed one. There's no route to insert a facet yet (no
-    // real facet type built), so this reaches into the DO's own storage
-    // via a second /setup-adjacent path is not available -- documenting
-    // the gap: this test can only assert the filtered query's SHAPE
-    // (owner_did absent) until a facet-insertion route exists to seed
-    // both visibilities and assert the filter's BEHAVIOR end to end.
+    expect(JSON.stringify(status)).not.toContain(OWNER_DID);
+    expect(status.service_key).toMatch(/^z6Mk/);
+    expect(JSON.stringify(status)).not.toMatch(/pkcs8|private/i);
   });
 });

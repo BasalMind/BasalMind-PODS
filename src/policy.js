@@ -19,18 +19,13 @@
 // policy table can default-deny every OTHER principal while the owner
 // still reaches their own pod. See evaluatePolicy()'s own doc comment.
 //
-// Caller-identity gap, stated plainly rather than assumed: this module
-// answers "does the policy table permit principalDid to do this," given a
-// principalDid the CALLER already asserts. It does not itself verify that
-// the caller genuinely controls that DID -- that's a request-signature
-// verification step (checking a signed request against a key the
-// caller's did:webvh log currently authorizes, mirroring
-// BasalTribe/basaltribe/pod_did_verifier.py's server-side verification)
-// that does not exist yet in this template. Every caller of
-// evaluatePolicy() MUST authenticate principalDid before calling this,
-// or the whole mechanism is decorative. Named here, not built yet, same
-// "ship what's real, name the rest" discipline used on the Python side
-// this session.
+// Caller identity: this module answers "does the policy table permit
+// principalDid to do this," given a principalDid the CALLER has already
+// authenticated. Authentication is signed_request.js (S1, BL#18122): the
+// principal is whatever a verified Ed25519 request signature proved, via
+// facet_kernel.js's requirePolicy(). Any other caller of evaluatePolicy()
+// MUST authenticate principalDid the same way first, or the whole
+// mechanism is decorative.
 
 export function setupPolicyTables(sql) {
   sql(`
@@ -52,9 +47,21 @@ export function setupPolicyTables(sql) {
                       expires_at IS NULL
                       OR expires_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z'
                     ),
+      -- S1 (BL#18122): structured row predicate, JSON {"column": ..., "equals": ...},
+      -- NULL = all rows. Never SQL text: scoped_query.js validates the column
+      -- against the table's allowlist and binds the value as a parameter.
+      -- Only meaningful on effect='allow' (a deny always applies to the
+      -- whole action/resource); the write path rejects it on deny.
+      row_predicate TEXT,
       created_at    TEXT NOT NULL
     );
   `);
+  // CREATE TABLE IF NOT EXISTS never adds a column to a table that already
+  // exists, so a pod created before S1 gets it here.
+  const cols = [...sql(`PRAGMA table_info(policy_grants);`)].map((r) => r.name);
+  if (!cols.includes("row_predicate")) {
+    sql(`ALTER TABLE policy_grants ADD COLUMN row_predicate TEXT;`);
+  }
   sql(`
     CREATE INDEX IF NOT EXISTS idx_policy_grants_lookup
       ON policy_grants (principal_did, action, resource);
@@ -123,13 +130,13 @@ export function recordPresentedReceipt(sql, principalDid, claimedScope, maxRows)
  */
 export function evaluatePolicy(sql, { ownerDid, principalDid, action, resource }) {
   if (principalDid === ownerDid) {
-    return { decision: "allow", reason: "owner" };
+    return { decision: "allow", reason: "owner", predicates: [null] };
   }
 
   const now = new Date().toISOString();
   const rows = [
     ...sql(
-      `SELECT effect FROM policy_grants
+      `SELECT effect, row_predicate FROM policy_grants
        WHERE principal_did = ? AND action = ? AND resource = ?
          AND (expires_at IS NULL OR expires_at > ?);`,
       principalDid,
@@ -142,8 +149,21 @@ export function evaluatePolicy(sql, { ownerDid, principalDid, action, resource }
   if (rows.some((r) => r.effect === "deny")) {
     return { decision: "deny", reason: "explicit_deny" };
   }
-  if (rows.some((r) => r.effect === "allow")) {
-    return { decision: "allow", reason: "explicit_allow" };
+  const allows = rows.filter((r) => r.effect === "allow");
+  if (allows.length > 0) {
+    // One entry per live allow grant: null = unrestricted rows, else the
+    // parsed predicate. The scoped-query choke point ORs them. A predicate
+    // that cannot be parsed is kept as the string "invalid" so it fails
+    // closed there (matches no rows) rather than silently widening access.
+    const predicates = allows.map((r) => {
+      if (r.row_predicate === null || r.row_predicate === undefined) return null;
+      try {
+        return JSON.parse(r.row_predicate);
+      } catch {
+        return "invalid";
+      }
+    });
+    return { decision: "allow", reason: "explicit_allow", predicates };
   }
   return { decision: "deny", reason: "no_matching_grant" };
 }
@@ -169,22 +189,31 @@ export function evaluatePolicy(sql, { ownerDid, principalDid, action, resource }
  * OTHER than the validated Hono route (e.g. a future internal caller)
  * are responsible for validating shape themselves -- this function
  * trusts its inputs' SHAPE, never their AUTHORITY. */
-export function upsertPolicyGrant(sql, { ownerDid, editorDid, grantId, principalDid, action, resource, effect, expiresAt }) {
+export function upsertPolicyGrant(sql, { ownerDid, editorDid, grantId, principalDid, action, resource, effect, expiresAt, rowPredicate = null }) {
+  // S1 (BL#18122): "editor is the owner" now means "authenticated by a
+  // signature from the pod's own root key" -- the only key class that can
+  // authenticate as ownerDid at all (principal_keys.js). A grant for
+  // policy.write to some other principal is never enough, and the service
+  // key is never the owner.
   if (editorDid !== ownerDid) {
-    throw new PolicyEditForbidden(`${editorDid} is not the pod owner -- only the owner may edit policy_grants`);
+    throw new PolicyEditForbidden(`${editorDid} is not the pod owner -- only the owner (root key) may edit policy_grants`);
+  }
+  if (rowPredicate !== null && effect !== "allow") {
+    throw new PolicyEditForbidden("a row predicate is only meaningful on an allow grant");
   }
   sql(
-    `INSERT INTO policy_grants (grant_id, principal_did, action, resource, effect, expires_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO policy_grants (grant_id, principal_did, action, resource, effect, expires_at, row_predicate, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (grant_id) DO UPDATE SET
        principal_did = excluded.principal_did, action = excluded.action, resource = excluded.resource,
-       effect = excluded.effect, expires_at = excluded.expires_at;`,
+       effect = excluded.effect, expires_at = excluded.expires_at, row_predicate = excluded.row_predicate;`,
     grantId,
     principalDid,
     action,
     resource,
     effect,
     expiresAt,
+    rowPredicate === null ? null : JSON.stringify(rowPredicate),
     new Date().toISOString(),
   );
 }

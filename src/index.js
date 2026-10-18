@@ -2,9 +2,19 @@ import { DurableObject } from "cloudflare:workers";
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { setupPolicyTables, upsertPolicyGrant, PolicyEditForbidden } from "./policy.js";
-import { SetupBodySchema, PolicyGrantSchema } from "./schemas.js";
-import { setupStatusCacheTable } from "./registry_authority_status.js";
+import { PolicyGrantSchema } from "./schemas.js";
+import {
+  setupStatusCacheTable,
+  verifyAndParseDocument,
+  REGISTRY_AUTHORITY_PUBLIC_KEY_MULTIKEY,
+} from "./registry_authority_status.js";
 import { createFacetKernel } from "./facet_kernel.js";
+import { setupNonceTable, verifySignedRequest, describeRequest, AUTH_HEADER_NAMES } from "./signed_request.js";
+import { createKeyResolver, parsePinnedPrincipals } from "./principal_keys.js";
+import { parseDidLog, activeUpdateKeys, extendsLog, storedEntries, InvalidDidLog, MAX_DID_LOG_BYTES } from "./did_log.js";
+import { ensureServiceKey } from "./service_key.js";
+import { bytesToBase64Url } from "./encoding.js";
+import { dumpTables, buildExport } from "./export.js";
 import { InventoryFacet } from "./facets/inventory/index.js";
 
 // Re-exported so wrangler's durable_objects binding for INVENTORY_FACET
@@ -27,9 +37,19 @@ export { InventoryFacet };
 // set that isn't PodRoot's own -- routes are only ever forwarded, never
 // path-rewritten (see InventoryFacet.buildApp()'s own note on why its
 // Hono routes are registered at their full "/inventory/..." paths).
+//
+// `public: true` routes need no signature (/status, the published DID log,
+// /challenge -- the last authenticates its caller by the registry
+// authority's signature on the nonce instead). Every other route must carry
+// a signed request, so the Worker also cheap-rejects a request with no
+// signature header at all before waking a DO. POST /setup is gone (S1):
+// the pod initializes itself on first boot from the OWNER_DID binding.
 const KNOWN_ROUTES = [
-  { method: "POST", path: "/setup", binding: "POD_ROOT" },
-  { method: "GET", path: "/status", binding: "POD_ROOT" },
+  { method: "GET", path: "/status", binding: "POD_ROOT", public: true },
+  { method: "GET", path: "/.well-known/did.jsonl", binding: "POD_ROOT", public: true },
+  { method: "PUT", path: "/.well-known/did.jsonl", binding: "POD_ROOT" },
+  { method: "GET", path: "/challenge", binding: "POD_ROOT", public: true },
+  { method: "GET", path: "/export", binding: "POD_ROOT" },
   { method: "POST", path: "/policy/grants", binding: "POD_ROOT" },
   { method: "GET", path: "/facets", binding: "POD_ROOT" },
   { method: "POST", path: "/inventory/items", binding: "INVENTORY_FACET" },
@@ -54,13 +74,12 @@ const KNOWN_ROUTES = [
 //     -- UCAN grants are receipts, not authority; policy.js is the real
 //     decision, see that module's own doc comment for the full reasoning.
 //
-// PROOF-OF-CONCEPT SCOPE, still true of everything except the policy
-// layer added this session: this does NOT implement the binding
-// certificate, the signed facet index publication, or any real facet --
-// those are separate, sequenced work (see the security addendum's own
-// prerequisite ordering). The policy layer's OWN scope gap: caller
-// identity is asserted (an X-Principal-Did header), not yet
-// cryptographically verified -- see policy.js's module doc comment.
+// PROOF-OF-CONCEPT SCOPE: this does NOT implement the binding
+// certificate or the signed facet index publication -- those are
+// separate, sequenced work (see the security addendum's own prerequisite
+// ordering). Caller identity IS now cryptographically verified (S1,
+// BL#18122): see signed_request.js. First-boot init from OWNER_DID
+// replaced the old unauthenticated POST /setup.
 //
 // Clean Zod rewrite, 2026-08-31 (Jonah's call): request-boundary shape
 // validation (schemas.js) now happens once, declaratively, via
@@ -95,24 +114,54 @@ export class PodRoot extends DurableObject {
     // facet_kernel.js so InventoryFacet (the first real facet DO) can
     // share this exact logic rather than a second, independently-drifting
     // copy -- see that file's own doc comment for what this is and isn't.
-    // Bound here, not module-level, since each is scoped to THIS
-    // instance's own sql()/ownerDid() -- behavior-preserving, verified by
-    // this file's own existing test suite (pod-root.test.js,
-    // standing_veto.test.js, worker-entry.test.js) passing unmodified.
     const kernel = createFacetKernel({
       sql: (q, ...b) => this.sql(q, ...b),
       getOwnerDid: () => this.ownerDid(),
+      verifyRequest: (desc) => this.verifyRequest(desc),
+      tables: POD_ROOT_TABLES,
     });
     this.requirePolicy = kernel.requirePolicy;
     this.protectedRoute = kernel.protectedRoute;
+    this.serviceKey = null;
     this.app = this.buildApp();
+    // First boot (S1): mint the service key and initialize from the
+    // OWNER_DID binding BEFORE any request is served. blockConcurrencyWhile
+    // makes this single-flight, so two concurrent first requests can neither
+    // mint two keys nor race the init.
+    ctx.blockConcurrencyWhile(() => this.firstBoot());
   }
 
   sql(query, ...bindings) {
     return this.ctx.storage.sql.exec(query, ...bindings);
   }
 
-  async setup(ownerDid) {
+  async firstBoot() {
+    this.serviceKey = await ensureServiceKey(this.ctx.storage);
+    this.createTables();
+    const existing = this.ownerDid();
+    const binding = this.env.OWNER_DID;
+    if (!existing && typeof binding === "string" && binding.startsWith("did:") && binding.length <= 2048) {
+      await this.initialize(binding);
+    }
+    // No OWNER_DID binding (or a malformed one): fail closed -- the pod
+    // stays uninitialized, every protected route answers 409.
+  }
+
+  // Explicit initialization RPC (callable only through a Worker binding,
+  // never over HTTP). First boot already runs this automatically, so in
+  // practice a second call -- from anyone -- is always rejected.
+  async init() {
+    if (this.ownerDid()) {
+      throw new AlreadyInitialized("pod is already initialized");
+    }
+    if (!this.env.OWNER_DID) {
+      throw new MissingOwnerDid("no OWNER_DID binding -- there is no owner to root policy on");
+    }
+    await this.initialize(this.env.OWNER_DID);
+    return { ok: true };
+  }
+
+  createTables() {
     this.sql(`
       CREATE TABLE IF NOT EXISTS pod_meta (
         singleton         INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -135,47 +184,34 @@ export class PodRoot extends DurableObject {
         retired_at      TEXT
       );
     `);
+    this.sql(`
+      CREATE TABLE IF NOT EXISTS did_log (
+        singleton  INTEGER PRIMARY KEY CHECK (singleton = 1),
+        jsonl      TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
     setupPolicyTables((q, ...b) => this.sql(q, ...b));
     setupStatusCacheTable((q, ...b) => this.sql(q, ...b));
+    setupNonceTable((q, ...b) => this.sql(q, ...b));
+  }
 
-    const existing = [...this.sql(`SELECT pod_id FROM pod_meta WHERE singleton = 1;`)][0];
-    if (!existing) {
-      if (!ownerDid) {
-        throw new MissingOwnerDid("first-time setup requires an owner DID -- there is no owner to root policy on otherwise");
-      }
-      this.sql(
-        `INSERT INTO pod_meta (singleton, pod_id, protocol_version, owner_did, created_at) VALUES (1, ?, ?, ?, ?);`,
-        crypto.randomUUID(),
-        "poc-v0",
-        ownerDid,
-        new Date().toISOString(),
-      );
-    }
-
-    // Resolve the real owner regardless of whether this was a first-time
-    // or idempotent repeat call, then bootstrap every registered facet
-    // with it -- InventoryFacet.setup() needs a real owner DID even when
-    // this /setup call itself omitted one (the idempotent-repeat case
-    // pod-root.test.js already covers for pod_meta itself).
-    const owner = [...this.sql(`SELECT owner_did FROM pod_meta WHERE singleton = 1;`)][0].owner_did;
-    await this.setupInventoryFacet(owner);
-
-    // Deliberately NOT this.status() -- see that method's own comment.
-    // /setup's response goes only to the caller who just performed setup
-    // (or is re-confirming an already-set-up pod), so echoing owner_did
-    // back here is a one-time acknowledgment, not the standing,
-    // repeatable, unauthenticated disclosure /status was leaking.
-    const meta = [...this.sql(`SELECT pod_id, protocol_version, owner_did, created_at FROM pod_meta WHERE singleton = 1;`)][0];
-    return { ok: true, pod: meta };
+  async initialize(ownerDid) {
+    this.sql(
+      `INSERT INTO pod_meta (singleton, pod_id, protocol_version, owner_did, created_at) VALUES (1, ?, ?, ?, ?);`,
+      crypto.randomUUID(),
+      "poc-v0",
+      ownerDid,
+      new Date().toISOString(),
+    );
+    await this.setupInventoryFacet(ownerDid);
   }
 
   // Calls InventoryFacet.setup() via Workers RPC -- a DurableObject
   // subclass's public methods are callable directly on its own stub
   // (env.INVENTORY_FACET.get(id)), not just fetch() -- so a facet never
-  // needs a separate onboarding step of its own; setting up the pod sets
-  // up every registered facet with it. Idempotent (both this insert and
-  // InventoryFacet.setup() itself), safe to call on every /setup hit, not
-  // just the first-time one.
+  // needs a separate onboarding step of its own; initializing the pod sets
+  // up every registered facet with it. Idempotent.
   async setupInventoryFacet(ownerDid) {
     const id = this.env.INVENTORY_FACET.idFromName("inventory");
     const stub = this.env.INVENTORY_FACET.get(id);
@@ -189,21 +225,11 @@ export class PodRoot extends DurableObject {
   }
 
   // Bounded Fable review, 2026-08-31, finding 1: /status is deliberately
-  // unauthenticated (a health check any caller, including an owner who
-  // hasn't proven anything yet, should be able to hit) -- but it was
-  // leaking owner_did (the exact value X-Principal-Did-based ownership
-  // hinges on, given the named unauthenticated-caller-identity gap) and
-  // every facet regardless of visibility, including 'private' ones. Fixed:
-  // owner_did dropped from this response entirely (an authenticated route
-  // is the right place for a caller to confirm their own ownership, not a
-  // public one); facets filtered to visibility='listed' only.
+  // unauthenticated -- owner_did is dropped from this response and facets
+  // are filtered to visibility='listed' only. S1 adds the service key's
+  // PUBLIC multikey (never anything private) so the phone can build the
+  // genesis DID log around it (design s4.4).
   async status() {
-    // Real bug, found writing worker-entry.test.js: pod_meta/
-    // facet_directory don't exist at all until /setup has run once (same
-    // "table not found" IS "not set up yet" fact ownerDid() already
-    // handles) -- a fresh deploy's very first /status check, before
-    // anyone has run /setup, previously crashed with a raw 500 instead of
-    // reporting the true, unremarkable "not set up yet" state.
     let meta, facets;
     try {
       meta = [...this.sql(`SELECT pod_id, protocol_version, created_at FROM pod_meta WHERE singleton = 1;`)][0];
@@ -216,15 +242,16 @@ export class PodRoot extends DurableObject {
     }
     return {
       ok: true,
-      scope: "proof-of-concept -- launch mechanics + policy-table authorization, no binding certificate, no real facet, no cryptographic caller verification yet",
+      scope: "proof-of-concept -- launch mechanics + signed-request principal + policy-table authorization, no binding certificate, no real did:webvh log verification",
       pod: meta || null,
       facets,
+      service_key: this.serviceKey ? this.serviceKey.publicMultikey : null,
+      did_log_published: this.loadDidLogText() !== null,
     };
   }
 
   ownerDid() {
-    // pod_meta doesn't exist at all until /setup has run once -- a bare
-    // "table not found" SQL error IS "not set up yet," not a crash.
+    // pod_meta can be empty (never initialized) -- that IS "not set up".
     let rows;
     try {
       rows = [...this.sql(`SELECT owner_did FROM pod_meta WHERE singleton = 1;`)];
@@ -234,32 +261,188 @@ export class PodRoot extends DurableObject {
     return rows[0] ? rows[0].owner_did : null;
   }
 
-  // requirePolicy()/protectedRoute() now live in facet_kernel.js, bound to
-  // this instance in the constructor above -- see that file for the full
-  // behavior and its own doc comment for why this moved.
+  loadDidLogText() {
+    try {
+      const row = [...this.sql(`SELECT jsonl FROM did_log WHERE singleton = 1;`)][0];
+      return row ? row.jsonl : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // The pod's root keys: the active updateKeys of its OWN published DID log.
+  // The service key is never in this set (the log PUT rejects such a log).
+  rootKeys() {
+    const text = this.loadDidLogText();
+    return text === null ? [] : activeUpdateKeys(storedEntries(text));
+  }
+
+  keyResolver(owner) {
+    return createKeyResolver({
+      ownerDid: owner,
+      ownerKeys: () => this.rootKeys(),
+      pinned: parsePinnedPrincipals(this.env.PINNED_PRINCIPALS),
+    });
+  }
+
+  // Authenticates a described request (signed_request.js describeRequest).
+  // Public RPC so facet DOs verify through the one place that holds the
+  // owner's DID log and the replay cache. Returns a result object (never
+  // throws on a bad request) so the verdict survives the RPC boundary.
+  // audience = the pod's DID, read as OWNER_DID.
+  async verifyRequest(desc) {
+    const owner = this.ownerDid();
+    if (owner === null) {
+      return { ok: false, status: 409, error: "pod not set up" };
+    }
+    return verifySignedRequest({
+      desc,
+      audience: owner,
+      resolveKeys: this.keyResolver(owner),
+      sql: (q, ...b) => this.sql(q, ...b),
+    });
+  }
+
+  // Facet export over RPC (InventoryFacet.exportTables) for GET /export.
+  async collectExportTables() {
+    const tables = {};
+    for (const [name, rows] of Object.entries(dumpTables((q, ...b) => this.sql(q, ...b)))) {
+      tables[name] = rows;
+    }
+    const facetStub = this.env.INVENTORY_FACET.get(this.env.INVENTORY_FACET.idFromName("inventory"));
+    for (const [name, rows] of Object.entries(await facetStub.exportTables())) {
+      tables[`inventory/${name}`] = rows;
+    }
+    return tables;
+  }
+
+  registryAuthorityKeys() {
+    const raw = this.env.REGISTRY_AUTHORITY_KEYS;
+    if (typeof raw === "string" && raw.trim() !== "") {
+      return raw.split(",").map((k) => k.trim()).filter(Boolean);
+    }
+    return [REGISTRY_AUTHORITY_PUBLIC_KEY_MULTIKEY];
+  }
 
   buildApp() {
     const app = new Hono();
 
-    app.post("/setup", zValidator("json", SetupBodySchema), async (c) => {
-      const { owner_did: ownerDid } = c.req.valid("json");
-      try {
-        return c.json(await this.setup(ownerDid));
-      } catch (err) {
-        if (err instanceof MissingOwnerDid) {
-          return c.json({ error: err.message }, 400);
-        }
-        throw err;
-      }
-    });
-
     app.get("/status", async (c) => c.json(await this.status()));
 
-    // Owner-only: edit the policy table. Rooted in identity (policy.js's
-    // upsertPolicyGrant checks editorDid === ownerDid itself, defense in
-    // depth alongside this route's own requirePolicy gate) -- resource
-    // "policy_grants" is a deliberately reserved action/resource pair a
-    // real facet type's own action vocabulary should never reuse.
+    // Published DID log (design s4.5-6). Public read: it is the pod's
+    // public identity document. Written only by the owner-signed PUT below.
+    app.get("/.well-known/did.jsonl", (c) => {
+      const text = this.loadDidLogText();
+      if (text === null) return c.json({ error: "no DID log published" }, 404);
+      return new Response(text, { status: 200, headers: { "content-type": "text/jsonl; charset=utf-8" } });
+    });
+
+    // Owner-signed (root key) log append. For now this accepts the whole new
+    // log; the server-side append route (S5) is what really gates updates.
+    //   - Genesis (no stored log): the request must be signed by a key in
+    //     the SUBMITTED log's updateKeys (proof of possession), and the log
+    //     must be for OWNER_DID. The first valid log wins -- see the
+    //     unverified-SCID note in did_log.js.
+    //   - Later: signed by a key in the CURRENTLY STORED log's updateKeys
+    //     (so a rotation is authorized by the old key), and the new log must
+    //     extend the stored one by prefix.
+    app.put("/.well-known/did.jsonl", async (c) => {
+      const owner = this.ownerDid();
+      if (owner === null) return c.json({ error: "pod not set up" }, 409);
+      const raw = new Uint8Array(await c.req.raw.clone().arrayBuffer());
+      if (raw.length > MAX_DID_LOG_BYTES) return c.json({ error: "log too large" }, 413);
+      let text, entries;
+      try {
+        text = new TextDecoder("utf-8", { fatal: true }).decode(raw);
+        entries = parseDidLog(text, owner);
+      } catch (err) {
+        return c.json({ error: err instanceof InvalidDidLog ? err.message : "log is not valid UTF-8" }, 400);
+      }
+      const stored = this.loadDidLogText();
+      const authKeys = stored === null ? activeUpdateKeys(entries) : activeUpdateKeys(storedEntries(stored));
+      const auth = await verifySignedRequest({
+        desc: await describeRequest(c.req.raw),
+        audience: owner,
+        resolveKeys: async (did) => (did === owner ? authKeys : []),
+        sql: (q, ...b) => this.sql(q, ...b),
+      });
+      if (!auth.ok) return c.json({ error: auth.error }, auth.status);
+      if (stored !== null && !extendsLog(stored, text)) {
+        return c.json({ error: "new log must extend the stored log" }, 409);
+      }
+      if (activeUpdateKeys(entries).includes(this.serviceKey.publicMultikey)) {
+        return c.json({ error: "the service key must not be an updateKey" }, 400);
+      }
+      this.sql(
+        `INSERT INTO did_log (singleton, jsonl, updated_at) VALUES (1, ?, ?)
+         ON CONFLICT (singleton) DO UPDATE SET jsonl = excluded.jsonl, updated_at = excluded.updated_at;`,
+        text, new Date().toISOString(),
+      );
+      return c.json({ ok: true, entries: entries.length });
+    });
+
+    // Liveness proof (design s5). Accepts ONLY a nonce object signed by a
+    // registry-authority key (env REGISTRY_AUTHORITY_KEYS, comma-separated
+    // multikeys; defaults to the compiled-in registry key), so an arbitrary
+    // caller cannot get the service key to sign attacker-chosen bytes.
+    //   ?nonce=<base64url(JSON {nonce, audience, expires_at})>.<base64url(sig)>
+    // The reply is the service key's signature under a DIFFERENT domain tag
+    // than the request preimage, so it cannot be replayed as a request.
+    app.get("/challenge", async (c) => {
+      const owner = this.ownerDid();
+      if (owner === null) return c.json({ error: "pod not set up" }, 409);
+      const param = c.req.query("nonce") || "";
+      const dot = param.indexOf(".");
+      if (dot < 1 || param.length > 2048) return c.json({ error: "signed nonce required" }, 401);
+      let doc = null;
+      for (const key of this.registryAuthorityKeys()) {
+        try {
+          doc = await verifyAndParseDocument(param.slice(0, dot), param.slice(dot + 1), key);
+          break;
+        } catch {
+          // try the next authority key
+        }
+      }
+      const expiresMs = doc && typeof doc.expires_at === "string" ? Date.parse(doc.expires_at) : NaN;
+      const now = Date.now();
+      if (
+        !doc ||
+        typeof doc.nonce !== "string" || doc.nonce.length < 16 || doc.nonce.length > 128 ||
+        doc.audience !== owner ||
+        !(expiresMs > now) || expiresMs > now + CHALLENGE_MAX_LIFETIME_MS
+      ) {
+        return c.json({ error: "nonce not signed by a registry authority for this pod, or expired" }, 401);
+      }
+      const signature = await this.serviceKey.sign(
+        new TextEncoder().encode(JSON.stringify([LIVENESS_DOMAIN_TAG, doc.nonce, owner])),
+      );
+      return c.json({
+        ok: true,
+        nonce: doc.nonce,
+        audience: owner,
+        service_public_key: this.serviceKey.publicMultikey,
+        signature: bytesToBase64Url(signature),
+      });
+    });
+
+    // Owner-only: full JSONL export (export.js). Policy grants cannot widen
+    // this -- the handler requires the root-authenticated owner itself.
+    this.protectedRoute(app, "get", "/export", "pod_export.read", "pod_export", async (c) => {
+      if (!c.get("isOwner")) return c.json({ error: "forbidden", reason: "owner-only" }, 403);
+      const podId = [...this.sql(`SELECT pod_id FROM pod_meta WHERE singleton = 1;`)][0].pod_id;
+      const body = await buildExport({
+        podId,
+        generatedAt: new Date().toISOString(),
+        tables: await this.collectExportTables(),
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "text/jsonl; charset=utf-8" } });
+    });
+
+    // Policy edits are ROOT-ONLY: upsertPolicyGrant() requires the editor to
+    // be the owner, and the only key class that can authenticate as the
+    // owner is the pod's own root (updateKeys). The service key and any
+    // holder of a policy.write grant are rejected. resource "policy_grants"
+    // is a deliberately reserved action/resource pair.
     this.protectedRoute(app, "post", "/policy/grants", "policy.write", "policy_grants", async (c) => {
       const body = c.req.valid("json");
       try {
@@ -272,6 +455,7 @@ export class PodRoot extends DurableObject {
           resource: body.resource,
           effect: body.effect,
           expiresAt: body.expires_at,
+          rowPredicate: body.row_predicate ?? null,
         });
         return c.json({ ok: true });
       } catch (err) {
@@ -284,9 +468,12 @@ export class PodRoot extends DurableObject {
 
     // Reference-implementation protected route, exercising the pattern a
     // real facet type will repeat for its own actions/resources -- not
-    // itself a facet, just proof the middleware composes correctly.
+    // itself a facet, just proof the middleware composes correctly. Reads
+    // go through the scoped-query handle, never raw sql.
     this.protectedRoute(app, "get", "/facets", "facet_directory.read", "facet_directory", async (c) => {
-      const facets = [...this.sql(`SELECT facet_id, facet_profile, label, visibility FROM facet_directory;`)];
+      const facets = c.get("scoped").select("facet_directory").map((r) => ({
+        facet_id: r.facet_id, facet_profile: r.facet_profile, label: r.label, visibility: r.visibility,
+      }));
       return c.json({ facets, as: c.get("principalDid"), owner: c.get("isOwner") });
     });
 
@@ -300,24 +487,37 @@ export class PodRoot extends DurableObject {
 }
 
 export class MissingOwnerDid extends Error {}
+export class AlreadyInitialized extends Error {}
+
+const LIVENESS_DOMAIN_TAG = "basalmind-pod-service-liveness-v1";
+// A registry-signed challenge may not be valid for longer than this.
+const CHALLENGE_MAX_LIFETIME_MS = 10 * 60 * 1000;
+
+const POD_ROOT_TABLES = {
+  facet_directory: {
+    pk: "facet_id",
+    columns: ["facet_id", "facet_profile", "profile_version", "label", "service_path", "visibility", "created_at", "retired_at"],
+  },
+};
 
 const _NOT_FOUND = () =>
   new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: { "content-type": "application/json" } });
+const _UNAUTHENTICATED = () =>
+  new Response(JSON.stringify({ error: "signed request required" }), { status: 401, headers: { "content-type": "application/json" } });
 
 export default {
-  // Opus architecture review, 2026-08-31: previously forwarded every
-  // request to the DO unconditionally -- an anonymous caller spraying
-  // garbage paths/methods woke the DO and billed the customer's Cloudflare
-  // account (DO wall-clock duration) for work that was always going to
-  // 404. Cheap-reject against KNOWN_ROUTES here, on the Worker's own much
-  // cheaper billing, before the DO hop -- same "reject unauthenticated
-  // junk as early and cheaply as possible" principle already applied to
-  // the receipt-table write path inside the DO, one layer further out.
+  // Opus architecture review, 2026-08-31: cheap-reject against KNOWN_ROUTES
+  // here, on the Worker's own much cheaper billing, before the DO hop.
+  // S1 extends it: a non-public route with no signature header at all is a
+  // 401 here, also before any DO wakes (real verification is in the DO).
   async fetch(request, env) {
     const url = new URL(request.url);
     const route = KNOWN_ROUTES.find((r) => r.method === request.method && r.path === url.pathname);
     if (!route) {
       return _NOT_FOUND();
+    }
+    if (!route.public && !request.headers.get(AUTH_HEADER_NAMES.signature)) {
+      return _UNAUTHENTICATED();
     }
     if (route.binding === "INVENTORY_FACET") {
       const id = env.INVENTORY_FACET.idFromName("inventory");
