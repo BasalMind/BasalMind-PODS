@@ -147,7 +147,7 @@ describe("scoped-query choke point -- a non-owner cannot escape its row predicat
     expect((await strangerCall(stub, "GET", "/inventory/balances")).status).toBe(403);
   });
 
-  it("movements: the ledger runs only for rows the predicate approves, and fails closed on a predicate column the movement does not carry", async () => {
+  it("movements: only rows the predicate approves are inserted (and so affect balances)", async () => {
     const stub = await inventory();
     await seedItems(stub);
     await grant(stub, "mv-a1", "inventory_movement.write", "inventory_movement", { column: "sku", equals: "A-1" });
@@ -158,10 +158,43 @@ describe("scoped-query choke point -- a non-owner cannot escape its row predicat
     const balances = (await (await ownerCall(stub, "GET", "/inventory/balances")).json()).balances;
     expect(balances.map((b) => b.sku)).toEqual(["A-1"]); // Z-1 never got a movement
 
-    await grant(stub, "mv-bad", "inventory_movement.write", "inventory_movement", { column: "recorded_by", equals: STRANGER_DID });
-    // recorded_by is a valid movement column but is not part of the request body,
-    // so that grant cannot approve anything; the earlier sku grant still does.
+    // A second, narrower-than-nothing grant on another movement column does not widen access.
+    await grant(stub, "mv-qty", "inventory_movement.write", "inventory_movement", { column: "quantity_delta", equals: 99 });
     expect((await mv("Z-1", "k-z2")).status).toBe(403);
+  });
+
+  it("movements: a non-owner write runs entirely through the choke point -- balance and alert are maintained by schema triggers, the response leaks no balance, and overdraw rolls back", async () => {
+    const stub = await inventory();
+    await ownerCall(stub, "POST", "/inventory/items", { sku: "M-1", label: "m", reorder_threshold: 5 }).then((r) => r.arrayBuffer());
+    await grant(stub, "mv-all", "inventory_movement.write", "inventory_movement", null);
+    const mv = (kind, delta, key) => strangerCall(stub, "POST", "/inventory/movements", { sku: "M-1", kind, quantity_delta: delta, idempotency_key: key });
+
+    const first = await mv("receipt", 3, "m-1");
+    expect(first.status).toBe(201);
+    const firstBody = await first.json();
+    expect(firstBody.balance).toBeUndefined(); // movement grant does not cover balances
+    const bal = (await (await ownerCall(stub, "GET", "/inventory/balances")).json()).balances;
+    expect(bal[0].quantity_on_hand).toBe(3);
+    const alerts = (await (await ownerCall(stub, "GET", "/inventory/alerts/low-stock")).json()).alerts;
+    expect(alerts.map((a) => a.sku)).toEqual(["M-1"]); // 3 < threshold 5
+
+    // idempotent replay by the same non-owner: 200, no double count
+    expect((await mv("receipt", 3, "m-1")).status).toBe(200);
+    // overdraw: 409 and nothing written
+    expect((await mv("sale", -10, "m-2")).status).toBe(409);
+    const after = (await (await ownerCall(stub, "GET", "/inventory/balances")).json()).balances;
+    expect(after[0].quantity_on_hand).toBe(3);
+    // restocking clears the alert
+    expect((await mv("receipt", 10, "m-3")).status).toBe(201);
+    expect((await (await ownerCall(stub, "GET", "/inventory/alerts/low-stock")).json()).alerts).toEqual([]);
+  });
+
+  it("movements: a predicate on recorded_by is evaluable and matches the authenticated principal", async () => {
+    const stub = await inventory();
+    await seedItems(stub);
+    await grant(stub, "mv-me", "inventory_movement.write", "inventory_movement", { column: "recorded_by", equals: STRANGER_DID });
+    const res = await strangerCall(stub, "POST", "/inventory/movements", { sku: "Z-1", kind: "receipt", quantity_delta: 1, idempotency_key: "rb-1" });
+    expect(res.status).toBe(201);
   });
 
   it("balances and alerts reads are scoped the same way", async () => {

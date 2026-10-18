@@ -40,9 +40,12 @@ before this becomes the production pod-launch flow.
      (`dash.cloudflare.com/profile/api-tokens`), scoped at minimum to Workers Scripts: Edit.
    - `CLOUDFLARE_ACCOUNT_ID` -- your own Cloudflare account ID (visible on the Cloudflare
      dashboard's right sidebar for any zone, or via `wrangler whoami`).
-3. Go to your repo's **Actions** tab, select **Setup Pod**, and click **Run workflow**. Enter
-   your pod's DID in the `owner_did` field: it is bound to the Worker as `OWNER_DID` and becomes
-   the pod's immutable owner on first boot.
+3. Build your pod's **genesis DID log first**, on your own device: `updateKeys=[root]`,
+   `nextKeyHashes`, `portable: true`, and a DID document that does NOT yet contain the pod's
+   service key. Its SCID is now known, which fixes your pod DID
+   (`did:webvh:<SCID>:<domain>`). Then go to your repo's **Actions** tab, select **Setup Pod**,
+   and click **Run workflow**, entering that DID in the `owner_did` field: it is bound to the
+   Worker as `OWNER_DID` and becomes the pod's immutable owner on first boot.
    (If this is a fork rather than a template-generated copy, GitHub disables Actions on forks by
    default -- there's a one-time "I understand my workflows, go ahead and enable them" banner to
    click first.)
@@ -54,6 +57,16 @@ before this becomes the production pod-launch flow.
    shows only the public key as `service_key` on `/status`. Every other route needs a signed
    request (see `src/signed_request.js`); the old `POST /setup` and `X-Principal-Did` header no
    longer exist.
+6. Publish your identity: read `service_key` from `/status`, then `PUT /.well-known/did.jsonl`
+   (signed with your root key) the genesis log. The pod fully verifies it as did:webvh v1.0
+   (`src/did_log.js`) and accepts a first log only if its genesis SCID equals the SCID in
+   `OWNER_DID`, so nobody who lacks your genesis can claim the pod first. Then append entry 2,
+   root-signed, adding the service key as a `verificationMethod` and the service endpoint, and
+   `PUT` the extended log. Every later `PUT` must be a valid extension (hash chain, pre-rotation,
+   `eddsa-jcs-2022` proofs by the keys the chain authorizes) and be request-signed by the
+   currently active `updateKeys`. If pre-rotation is active, each later entry must restate
+   `updateKeys` and `nextKeyHashes`; commit your root key's hash in the genesis `nextKeyHashes`
+   if you want entry 2 to stay root-signed.
 
 At no point does this repo, this workflow, or BasalMind's own infrastructure receive your
 Cloudflare token -- it lives only in your own repo's GitHub Actions secrets, which GitHub

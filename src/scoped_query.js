@@ -95,7 +95,7 @@ export function createScopedQuery({ sql, tables }) {
 
   // Throws ScopeDenied unless `candidate` (a full or partial row) is
   // writable under the scope. Used internally and by handlers that run a
-  // pre-existing write procedure (the inventory ledger) on a guarded row.
+  // handler-side write procedure on a row the choke point has approved.
   function guardRow(scope, table, candidate) {
     const def = tableDef(table);
     if (scope.isOwner) return;

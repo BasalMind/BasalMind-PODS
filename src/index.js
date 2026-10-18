@@ -11,7 +11,7 @@ import {
 import { createFacetKernel } from "./facet_kernel.js";
 import { setupNonceTable, verifySignedRequest, describeRequest, AUTH_HEADER_NAMES } from "./signed_request.js";
 import { createKeyResolver, parsePinnedPrincipals } from "./principal_keys.js";
-import { parseDidLog, activeUpdateKeys, extendsLog, storedEntries, InvalidDidLog, MAX_DID_LOG_BYTES } from "./did_log.js";
+import { verifyDidLog, extractClaimedScid, activeUpdateKeys, extendsLog, storedEntries, InvalidDidLog, MAX_DID_LOG_BYTES, MAX_DID_LOG_ENTRIES } from "./did_log.js";
 import { ensureServiceKey } from "./service_key.js";
 import { bytesToBase64Url } from "./encoding.js";
 import { dumpTables, buildExport } from "./export.js";
@@ -140,10 +140,11 @@ export class PodRoot extends DurableObject {
     this.createTables();
     const existing = this.ownerDid();
     const binding = this.env.OWNER_DID;
-    if (!existing && typeof binding === "string" && binding.startsWith("did:") && binding.length <= 2048) {
+    if (!existing && isWebvhDid(binding)) {
       await this.initialize(binding);
     }
-    // No OWNER_DID binding (or a malformed one): fail closed -- the pod
+    // No OWNER_DID binding (or one that is not a did:webvh DID, whose SCID
+    // segment the DID log is later verified against): fail closed -- the pod
     // stays uninitialized, every protected route answers 409.
   }
 
@@ -242,7 +243,7 @@ export class PodRoot extends DurableObject {
     }
     return {
       ok: true,
-      scope: "proof-of-concept -- launch mechanics + signed-request principal + policy-table authorization, no binding certificate, no real did:webvh log verification",
+      scope: "proof-of-concept -- launch mechanics + signed-request principal + policy-table authorization, no binding certificate, did:webvh log verified in-pod",
       pod: meta || null,
       facets,
       service_key: this.serviceKey ? this.serviceKey.publicMultikey : null,
@@ -337,29 +338,40 @@ export class PodRoot extends DurableObject {
       return new Response(text, { status: 200, headers: { "content-type": "text/jsonl; charset=utf-8" } });
     });
 
-    // Owner-signed (root key) log append. For now this accepts the whole new
-    // log; the server-side append route (S5) is what really gates updates.
-    //   - Genesis (no stored log): the request must be signed by a key in
-    //     the SUBMITTED log's updateKeys (proof of possession), and the log
-    //     must be for OWNER_DID. The first valid log wins -- see the
-    //     unverified-SCID note in did_log.js.
-    //   - Later: signed by a key in the CURRENTLY STORED log's updateKeys
-    //     (so a rotation is authorized by the old key), and the new log must
-    //     extend the stored one by prefix.
+    // Root-signed DID log publication (design s4.4-4.6). The WHOLE log is
+    // fully verified as did:webvh v1.0 (did_log.js: SCID, hash chain,
+    // pre-rotation, eddsa-jcs-2022 proofs, state.id) against OWNER_DID, so:
+    //   - Genesis (no stored log): the log's SCID must equal the SCID in
+    //     OWNER_DID, which binds the genesis updateKeys to the DID string --
+    //     nobody who lacks the owner's genesis can claim the pod first. The
+    //     request itself must also be signed by a key in that genesis.
+    //   - Later: request signed by the CURRENTLY STORED active updateKeys,
+    //     the new log must extend the stored one by prefix, and every new
+    //     entry must carry valid proofs by the keys the chain authorizes.
+    // Order is deliberate: the cheap request-signature check runs before the
+    // CPU-heavier full log verification, so unauthenticated callers cannot
+    // make the pod hash a 256 KiB log.
     app.put("/.well-known/did.jsonl", async (c) => {
       const owner = this.ownerDid();
       if (owner === null) return c.json({ error: "pod not set up" }, 409);
       const raw = new Uint8Array(await c.req.raw.clone().arrayBuffer());
       if (raw.length > MAX_DID_LOG_BYTES) return c.json({ error: "log too large" }, 413);
-      let text, entries;
+      let text, submitted;
       try {
         text = new TextDecoder("utf-8", { fatal: true }).decode(raw);
-        entries = parseDidLog(text, owner);
-      } catch (err) {
-        return c.json({ error: err instanceof InvalidDidLog ? err.message : "log is not valid UTF-8" }, 400);
+        const lines = text.split("\n").filter((l) => l.trim() !== "");
+        if (lines.length === 0 || lines.length > MAX_DID_LOG_ENTRIES) throw new Error("bad entry count");
+        submitted = lines.map((l) => JSON.parse(l));
+      } catch {
+        return c.json({ error: "log is not valid UTF-8 JSONL" }, 400);
       }
       const stored = this.loadDidLogText();
-      const authKeys = stored === null ? activeUpdateKeys(entries) : activeUpdateKeys(storedEntries(stored));
+      let authKeys;
+      try {
+        authKeys = stored === null ? activeUpdateKeys(submitted) : activeUpdateKeys(storedEntries(stored));
+      } catch {
+        return c.json({ error: "log is malformed" }, 400);
+      }
       const auth = await verifySignedRequest({
         desc: await describeRequest(c.req.raw),
         audience: owner,
@@ -370,7 +382,13 @@ export class PodRoot extends DurableObject {
       if (stored !== null && !extendsLog(stored, text)) {
         return c.json({ error: "new log must extend the stored log" }, 409);
       }
-      if (activeUpdateKeys(entries).includes(this.serviceKey.publicMultikey)) {
+      let verified;
+      try {
+        verified = await verifyDidLog(owner, text);
+      } catch (err) {
+        return c.json({ error: err instanceof InvalidDidLog ? err.message : "log failed verification" }, 400);
+      }
+      if (verified.activeUpdateKeys.includes(this.serviceKey.publicMultikey)) {
         return c.json({ error: "the service key must not be an updateKey" }, 400);
       }
       this.sql(
@@ -378,7 +396,7 @@ export class PodRoot extends DurableObject {
          ON CONFLICT (singleton) DO UPDATE SET jsonl = excluded.jsonl, updated_at = excluded.updated_at;`,
         text, new Date().toISOString(),
       );
-      return c.json({ ok: true, entries: entries.length });
+      return c.json({ ok: true, entries: verified.entries.length });
     });
 
     // Liveness proof (design s5). Accepts ONLY a nonce object signed by a
@@ -488,6 +506,16 @@ export class PodRoot extends DurableObject {
 
 export class MissingOwnerDid extends Error {}
 export class AlreadyInitialized extends Error {}
+
+function isWebvhDid(value) {
+  if (typeof value !== "string" || value.length > 2048) return false;
+  try {
+    extractClaimedScid(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const LIVENESS_DOMAIN_TAG = "basalmind-pod-service-liveness-v1";
 // A registry-signed challenge may not be valid for longer than this.

@@ -24,7 +24,7 @@ import { setupStatusCacheTable } from "../../registry_authority_status.js";
 import { createFacetKernel } from "../../facet_kernel.js";
 import { dumpTables } from "../../export.js";
 import { InventoryItemCreateSchema, InventoryItemUpdateSchema, MovementSchema } from "./schemas.js";
-import { applyMovement, evaluateReorderAlerts, UnknownSku, IdempotencyKeyCollision } from "./ledger.js";
+import { evaluateReorderAlerts, LEDGER_TRIGGERS } from "./ledger.js";
 
 // No basis in any design doc for this figure -- an hourly sweep is a
 // reasonable default per the plan's own "small decisions during the
@@ -87,6 +87,11 @@ export class InventoryFacet extends DurableObject {
     // still drives setup() on its own first boot; this just means the facet
     // can never be left owner-less if it is reached first.
     ctx.blockConcurrencyWhile(async () => {
+      // Pods created before the ledger moved into triggers get them on the
+      // next activation (idempotent DDL).
+      if (this.ownerDid() !== null) {
+        for (const ddl of LEDGER_TRIGGERS) this.sql(ddl);
+      }
       if (this.ownerDid() === null && typeof env.OWNER_DID === "string" && env.OWNER_DID.startsWith("did:")) {
         await this.setup(env.OWNER_DID);
       }
@@ -192,6 +197,8 @@ export class InventoryFacet extends DurableObject {
       ) STRICT;
     `);
 
+    for (const ddl of LEDGER_TRIGGERS) this.sql(ddl);
+
     const existing = [...this.sql(`SELECT owner_did FROM facet_meta WHERE singleton = 1;`)][0];
     if (!existing) {
       this.sql(
@@ -281,40 +288,55 @@ export class InventoryFacet extends DurableObject {
 
     this.protectedRoute(app, "post", "/inventory/movements", "inventory_movement.write", "inventory_movement", async (c) => {
       const body = c.req.valid("json");
-      // The ledger (ledger.js) is a multi-statement write procedure that
-      // also maintains inventory_balance, so it cannot be expressed as one
-      // scoped insert. It runs only AFTER the scoped-query choke point has
-      // approved the candidate movement row for this principal's grant;
-      // a predicate on a column the movement body does not carry fails
-      // closed (ScopeDenied -> 403).
-      c.get("scoped").guardRow("inventory_movement", { sku: body.sku, kind: body.kind });
-      let result;
+      const scoped = c.get("scoped");
+      const isOwner = c.get("isOwner");
+      // Balance head is a different table/grant: only the owner's scope
+      // covers it, so a movement-only writer never sees stock levels.
+      const balanceOf = (sku) =>
+        isOwner ? scoped.select("inventory_balance", { where: `"sku" = ?`, params: [sku] })[0] : undefined;
+
+      // Idempotent replay: read through the scoped handle (a key used by a
+      // movement outside this principal's scope is invisible here and falls
+      // through to the UNIQUE violation below -> 409).
+      const existing = scoped.select("inventory_movement", { where: `"idempotency_key" = ?`, params: [body.idempotency_key] })[0];
+      if (existing) {
+        if (existing.sku !== body.sku || existing.kind !== body.kind || existing.quantity_delta !== body.quantity_delta) {
+          return c.json({
+            error: `idempotency_key ${JSON.stringify(body.idempotency_key)} was already used for a different movement ` +
+              `(sku=${JSON.stringify(existing.sku)}, kind=${JSON.stringify(existing.kind)}, quantity_delta=${existing.quantity_delta}) -- ` +
+              `reusing a key across different movements is a caller bug, not a safe retry.`,
+          }, 409);
+        }
+        return c.json({ ok: true, idempotent: true, movementSeq: existing.movement_seq, balance: balanceOf(existing.sku) }, 200);
+      }
+
+      // ONE scoped insert: the choke point checks the row against the
+      // grant's predicate, and the schema's AFTER INSERT triggers
+      // (ledger.js) maintain balance + alert atomically with it.
       try {
-        result = this.ctx.storage.transactionSync(() =>
-          applyMovement((q, ...b) => this.sql(q, ...b), {
-            sku: body.sku,
-            kind: body.kind,
-            quantityDelta: body.quantity_delta,
-            idempotencyKey: body.idempotency_key,
-            recordedBy: c.get("principalDid"),
-          }),
-        );
+        scoped.insert("inventory_movement", {
+          sku: body.sku,
+          kind: body.kind,
+          quantity_delta: body.quantity_delta,
+          idempotency_key: body.idempotency_key,
+          recorded_by: c.get("principalDid"),
+          recorded_at: new Date().toISOString(),
+        });
       } catch (err) {
-        if (err instanceof UnknownSku) {
-          return c.json({ error: err.message }, 400);
+        const msg = String(err.message || err);
+        if (msg.includes("FOREIGN KEY")) {
+          return c.json({ error: `no inventory_item with sku ${JSON.stringify(body.sku)}` }, 400);
         }
-        if (err instanceof IdempotencyKeyCollision) {
-          return c.json({ error: err.message }, 409);
+        if (msg.includes("idempotency_key")) {
+          return c.json({ error: `idempotency_key ${JSON.stringify(body.idempotency_key)} is already in use` }, 409);
         }
-        if (String(err.message || err).includes("chk_inventory_balance_non_negative")) {
+        if (msg.includes("chk_inventory_balance_non_negative")) {
           return c.json({ error: "insufficient stock" }, 409);
         }
         throw err;
       }
-      // Idempotency replay returns 200-with-existing-record, never a 500
-      // or a silent double-count -- a POS retry after a timeout is the
-      // expected path, not an error.
-      return c.json({ ok: true, ...result }, result.idempotent ? 200 : 201);
+      const written = scoped.select("inventory_movement", { where: `"idempotency_key" = ?`, params: [body.idempotency_key] })[0];
+      return c.json({ ok: true, idempotent: false, movementSeq: written.movement_seq, balance: balanceOf(body.sku) }, 201);
     }, MovementSchema);
 
     this.protectedRoute(app, "get", "/inventory/balances", "inventory_balance.read", "inventory_balance", async (c) => {

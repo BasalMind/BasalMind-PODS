@@ -1,27 +1,14 @@
 // Shared test helpers: deterministic identities, a request signer that
 // mirrors signed_request.js's preimage, and a pod bootstrapper.
 import { env, runInDurableObject } from "cloudflare:test";
-import { SEEDS, OWNER_DID, STRANGER_DID, SERVICE_DID } from "./test_keys.js";
-import { encodeEd25519Multikey, bytesToBase64Url, sha256Hex } from "../src/encoding.js";
+import { SEEDS, OWNER_DID, OWNER_GENESIS, STRANGER_DID, SERVICE_DID } from "./test_keys.js";
+import { bytesToBase64Url, sha256Hex } from "../src/encoding.js";
 import { requestPreimage } from "../src/signed_request.js";
 
-export { OWNER_DID, STRANGER_DID, SERVICE_DID };
+export { OWNER_DID, OWNER_GENESIS, STRANGER_DID, SERVICE_DID };
 
-const PKCS8_PREFIX = "302e020100300506032b657004220420";
-const hexToBytes = (h) => new Uint8Array(h.match(/../g).map((b) => parseInt(b, 16)));
-
-export async function importSeed(seedHex) {
-  const der = hexToBytes(PKCS8_PREFIX + seedHex);
-  return crypto.subtle.importKey("pkcs8", der, { name: "Ed25519" }, true, ["sign"]);
-}
-
-// Multikey of the public half of a seed. WebCrypto cannot derive a public
-// key from a private one directly; the exported JWK carries it as "x".
-export async function multikeyOfSeed(seedHex) {
-  const jwk = await crypto.subtle.exportKey("jwk", await importSeed(seedHex));
-  const raw = Uint8Array.from(atob(jwk.x.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
-  return encodeEd25519Multikey(raw);
-}
+import { importSeed, multikeyOfSeed, buildGenesis, appendEntry, toJsonl, nextKeyHash } from "./log_builder.js";
+export { importSeed, multikeyOfSeed, buildGenesis, appendEntry, toJsonl, nextKeyHash };
 
 export async function identity(name, did) {
   return { did, privateKey: await importSeed(SEEDS[name]), multikey: await multikeyOfSeed(SEEDS[name]) };
@@ -73,14 +60,9 @@ export async function signedFetch(target, signer, path, { method = "GET", body, 
   });
 }
 
-export async function genesisLog({ did = OWNER_DID, updateKeys } = {}) {
-  const keys = updateKeys ?? [(await owner()).multikey];
-  return JSON.stringify({
-    versionId: "1-test",
-    versionTime: "2026-10-18T00:00:00Z",
-    parameters: { method: "did:webvh:1.0", scid: "test", updateKeys: keys, portable: true },
-    state: { "@context": ["https://www.w3.org/ns/did/v1"], id: did },
-  }) + "\n";
+// The owner's genesis log as JSONL (valid for OWNER_DID).
+export async function genesisLog() {
+  return toJsonl([OWNER_GENESIS.entry]);
 }
 
 export function podRootStub(name = "pod-root") {
@@ -90,10 +72,10 @@ export function podRootStub(name = "pod-root") {
 // Publishes the owner's (root-signed) genesis log on a pod root so owner
 // requests can authenticate. Pod roots initialize themselves on first boot
 // from the OWNER_DID binding, so there is no separate setup step.
-export async function publishOwnerLog(stub, { updateKeys } = {}) {
+export async function publishOwnerLog(stub) {
   const res = await signedFetch(stub, await owner(), "/.well-known/did.jsonl", {
     method: "PUT",
-    body: await genesisLog({ updateKeys }),
+    body: await genesisLog(),
   });
   // Always drain the body: an undrained response blocks evictDurableObject().
   const text = await res.text();

@@ -1,7 +1,8 @@
 import { env, evictDurableObject } from "cloudflare:test";
 import { describe, it, expect, vi } from "vitest";
 import {
-  OWNER_DID, STRANGER_DID, owner, stranger, mallory, importSeed, multikeyOfSeed,
+  OWNER_DID, OWNER_GENESIS, STRANGER_DID, owner, stranger, mallory, identity, importSeed, multikeyOfSeed,
+  buildGenesis, appendEntry, toJsonl, nextKeyHash, authHeaders,
   signedFetch, genesisLog, publishOwnerLog, freshPod, podRootStub, podServiceKeyMultikey, runInDurableObject,
 } from "./helpers.js";
 import { SEEDS } from "./test_keys.js";
@@ -62,61 +63,105 @@ describe("GET/PUT /.well-known/did.jsonl", () => {
     expect((await putLog(stub, await stranger(), await genesisLog())).status).toBe(401);
   });
 
-  it("genesis requires proof of possession: signed by a key that is NOT in the submitted log's updateKeys is rejected", async () => {
+  it("genesis also requires proof of possession: the right log signed by a key that is NOT in its updateKeys is rejected", async () => {
     const stub = podRootStub("did-pop");
-    const evilKey = await multikeyOfSeed(SEEDS.mallory);
-    const res = await putLog(stub, await owner(), await genesisLog({ updateKeys: [evilKey] }));
-    expect(res.status).toBe(401);
+    expect((await putLog(stub, await mallory(OWNER_DID), await genesisLog())).status).toBe(401);
   });
 
-  it("a log for a different DID is rejected", async () => {
-    const stub = podRootStub("did-wrong-id");
-    const res = await putLog(stub, await owner(), await genesisLog({ did: "did:webvh:other:example.com:persons:eve" }));
-    expect(res.status).toBe(400);
+  it("LAND-GRAB CLOSED: an attacker's self-consistent genesis (own SCID, own keys) is refused for OWNER_DID, and nothing is stored", async () => {
+    const stub = podRootStub("did-land-grab");
+    const evilMk = await multikeyOfSeed(SEEDS.mallory);
+    const evil = await buildGenesis({ domain: "example.com:persons:alice", signerSeed: SEEDS.mallory, params: { updateKeys: [evilMk], nextKeyHashes: [] } });
+    // (a) honestly self-consistent, but for the attacker's own SCID/DID
+    const a = await signedFetch(stub, await mallory(OWNER_DID), "/.well-known/did.jsonl", { method: "PUT", body: toJsonl([evil.entry]) });
+    expect(a.status).toBe(400);
+    // (b) the attacker rewrites the DID to OWNER_DID (re-hashing and re-signing everything it can)
+    const forged = JSON.parse(JSON.stringify(evil.entry));
+    forged.state.id = OWNER_DID;
+    const b = await signedFetch(stub, await mallory(OWNER_DID), "/.well-known/did.jsonl", { method: "PUT", body: toJsonl([forged]) });
+    expect(b.status).toBe(400);
+    // (c) the owner's real genesis with the attacker's key swapped in
+    const swapped = JSON.parse(JSON.stringify(OWNER_GENESIS.entry));
+    swapped.parameters.updateKeys = [evilMk];
+    const c = await signedFetch(stub, await mallory(OWNER_DID), "/.well-known/did.jsonl", { method: "PUT", body: toJsonl([swapped]) });
+    expect(c.status).toBe(400);
+    expect((await stub.fetch("http://pod/.well-known/did.jsonl")).status).toBe(404);
+    // ...and the real owner can still publish afterwards.
+    await publishOwnerLog(stub);
   });
 
-  it("a log with no or malformed updateKeys is rejected", async () => {
-    const stub = podRootStub("did-bad-keys");
-    expect((await putLog(stub, await owner(), await genesisLog({ updateKeys: [] }))).status).toBe(400);
-    expect((await putLog(stub, await owner(), await genesisLog({ updateKeys: ["not-a-key"] }))).status).toBe(400);
+  it("a tampered or non-JSON log is rejected", async () => {
+    const stub = podRootStub("did-tampered");
+    const tampered = JSON.parse(JSON.stringify(OWNER_GENESIS.entry));
+    tampered.state.alsoKnownAs = ["did:example:evil"];
+    expect((await putLog(stub, await owner(), toJsonl([tampered]))).status).toBe(400);
     expect((await putLog(stub, await owner(), "{not json\n")).status).toBe(400);
+    expect((await putLog(stub, await owner(), "")).status).toBe(400);
   });
 
-  it("a log that lists the pod's own service key as an updateKey is rejected", async () => {
-    const stub = podRootStub("did-service-in-update-keys");
+  it("the documented flow: genesis, then a root-signed entry 2 adding the service key verificationMethod and endpoint", async () => {
+    const stub = podRootStub("did-flow");
+    await publishOwnerLog(stub);
     const svc = await podServiceKeyMultikey(stub);
-    const res = await putLog(stub, await owner(), await genesisLog({ updateKeys: [(await owner()).multikey, svc] }));
-    expect(res.status).toBe(400);
-    expect((await res.json()).error).toMatch(/service key/);
+    const rootMk = (await owner()).multikey;
+    const entries = await appendEntry([OWNER_GENESIS.entry], {
+      signerSeed: SEEDS.ownerRoot,
+      // pre-rotation is active from genesis, so entry 2 restates updateKeys
+      // (root is one of the committed next keys) and nextKeyHashes
+      params: { updateKeys: [rootMk], nextKeyHashes: [await nextKeyHash(await multikeyOfSeed(SEEDS.ownerNext))] },
+      stateExtra: {
+        verificationMethod: [{ id: `${OWNER_DID}#service`, type: "Multikey", controller: OWNER_DID, publicKeyMultibase: svc }],
+        service: [{ id: "#pod", type: "SovereignPod", serviceEndpoint: "https://pods.basalmind.com/p/abc" }],
+      },
+    });
+    const res = await putLog(stub, await owner(), toJsonl(entries));
+    expect(res.status).toBe(200);
+    expect((await res.json()).entries).toBe(2);
+    expect((await (await stub.fetch("http://pod/.well-known/did.jsonl")).text()).trim().split("\n").length).toBe(2);
+    // the service key stays out of updateKeys: owner root still the only root
+    expect((await signedFetch(stub, await owner(), "/facets")).status).toBe(200);
   });
 
-  it("later updates must be signed by the currently stored updateKeys, must extend the log, and rotation hands control to the new key", async () => {
+  it("a later entry with a bad proof, a missing proof, or signed by an unauthorized key is rejected", async () => {
+    const stub = podRootStub("did-bad-entry2");
+    await publishOwnerLog(stub);
+    const rootMk = (await owner()).multikey;
+    const params = { updateKeys: [rootMk], nextKeyHashes: [await nextKeyHash(await multikeyOfSeed(SEEDS.ownerNext))] };
+    const wrongSigner = await appendEntry([OWNER_GENESIS.entry], { signerSeed: SEEDS.mallory, params });
+    expect((await putLog(stub, await owner(), toJsonl(wrongSigner))).status).toBe(400);
+    const noProof = await appendEntry([OWNER_GENESIS.entry], { signerSeed: SEEDS.ownerRoot, params });
+    delete noProof[1].proof;
+    expect((await putLog(stub, await owner(), toJsonl(noProof))).status).toBe(400);
+    // pre-rotation: updateKeys not committed in genesis nextKeyHashes
+    const uncommitted = await appendEntry([OWNER_GENESIS.entry], {
+      signerSeed: SEEDS.mallory, params: { updateKeys: [await multikeyOfSeed(SEEDS.mallory)], nextKeyHashes: [] },
+    });
+    expect((await putLog(stub, await owner(), toJsonl(uncommitted))).status).toBe(400);
+  });
+
+  it("rotation to the pre-committed key: must extend the log, old root loses authority, new key gains it", async () => {
     const stub = podRootStub("did-rotate");
     await publishOwnerLog(stub);
-    const genesis = await genesisLog();
-    const newKey = await multikeyOfSeed(SEEDS.mallory);
-    const rotation = JSON.stringify({
-      versionId: "2-test", parameters: { updateKeys: [newKey] }, state: { id: OWNER_DID },
-    }) + "\n";
+    const nextMk = await multikeyOfSeed(SEEDS.ownerNext);
+    const rotated = await appendEntry([OWNER_GENESIS.entry], {
+      signerSeed: SEEDS.ownerNext, // pre-rotation: signed by the keys of the CURRENT entry
+      params: { updateKeys: [nextMk], nextKeyHashes: [await nextKeyHash(await multikeyOfSeed(SEEDS.mallory))] },
+    });
+    // The request must be signed by the currently stored root, not the incoming key.
+    const nextSigner = { ...(await identity("ownerNext", OWNER_DID)) };
+    expect((await putLog(stub, nextSigner, toJsonl(rotated))).status).toBe(401);
+    expect((await putLog(stub, await owner(), toJsonl(rotated))).status).toBe(200);
 
-    // Not an extension (rewrites history) -> 409.
-    expect((await putLog(stub, await owner(), await genesisLog({ updateKeys: [newKey] }))).status).toBe(409);
-    // Extension signed by the new, not-yet-active key -> 401.
-    const newSigner = { ...(await mallory(OWNER_DID)) };
-    expect((await putLog(stub, newSigner, genesis + rotation)).status).toBe(401);
-    // Extension signed by the current root -> accepted.
-    expect((await putLog(stub, await owner(), genesis + rotation)).status).toBe(200);
-
-    // Now the OLD root no longer authenticates as owner; the new key does.
     expect((await signedFetch(stub, await owner(), "/facets")).status).toBe(401);
-    expect((await signedFetch(stub, newSigner, "/facets")).status).toBe(200);
+    expect((await signedFetch(stub, nextSigner, "/facets")).status).toBe(200);
+    // History cannot be rewritten: a log that does not extend the stored one is refused.
+    expect((await putLog(stub, nextSigner, toJsonl([OWNER_GENESIS.entry]))).status).toBe(409);
   });
 
   it("a replayed PUT is rejected", async () => {
     const stub = podRootStub("did-replay");
     await publishOwnerLog(stub);
     const body = await genesisLog();
-    const { authHeaders } = await import("./helpers.js");
     const headers = { "content-type": "application/json", ...(await authHeaders(await owner(), { method: "PUT", path: "/.well-known/did.jsonl", body })) };
     const first = await stub.fetch("http://pod/.well-known/did.jsonl", { method: "PUT", headers, body });
     expect(first.status).toBe(200);
