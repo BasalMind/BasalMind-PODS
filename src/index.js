@@ -9,9 +9,9 @@ import {
   REGISTRY_AUTHORITY_PUBLIC_KEY_MULTIKEY,
 } from "./registry_authority_status.js";
 import { createFacetKernel } from "./facet_kernel.js";
-import { setupNonceTable, verifySignedRequest, describeRequest, AUTH_HEADER_NAMES } from "./signed_request.js";
+import { setupNonceTable, verifySignedRequest, describeRequest, readBodyCapped, BodyTooLarge, DEFAULT_MAX_BODY_BYTES, AUTH_HEADER_NAMES } from "./signed_request.js";
 import { createKeyResolver, parsePinnedPrincipals } from "./principal_keys.js";
-import { verifyDidLog, extractClaimedScid, activeUpdateKeys, extendsLog, storedEntries, InvalidDidLog, MAX_DID_LOG_BYTES, MAX_DID_LOG_ENTRIES } from "./did_log.js";
+import { verifyDidLog, extractClaimedScid, activeUpdateKeys, extendsLog, storedEntries, InvalidDidLog, MAX_DID_LOG_BYTES } from "./did_log.js";
 import { ensureServiceKey } from "./service_key.js";
 import { bytesToBase64Url } from "./encoding.js";
 import { dumpTables, buildExport } from "./export.js";
@@ -47,7 +47,7 @@ export { InventoryFacet };
 const KNOWN_ROUTES = [
   { method: "GET", path: "/status", binding: "POD_ROOT", public: true },
   { method: "GET", path: "/.well-known/did.jsonl", binding: "POD_ROOT", public: true },
-  { method: "PUT", path: "/.well-known/did.jsonl", binding: "POD_ROOT" },
+  { method: "PUT", path: "/.well-known/did.jsonl", binding: "POD_ROOT", maxBody: 256 * 1024 },
   { method: "GET", path: "/challenge", binding: "POD_ROOT", public: true },
   { method: "GET", path: "/export", binding: "POD_ROOT" },
   { method: "POST", path: "/policy/grants", binding: "POD_ROOT" },
@@ -296,12 +296,15 @@ export class PodRoot extends DurableObject {
     if (owner === null) {
       return { ok: false, status: 409, error: "pod not set up" };
     }
-    return verifySignedRequest({
+    const result = await verifySignedRequest({
       desc,
       audience: owner,
       resolveKeys: this.keyResolver(owner),
       sql: (q, ...b) => this.sql(q, ...b),
     });
+    // Facets take the owner from HERE (the one authority), never from their
+    // own env or storage.
+    return result.ok ? { ...result, ownerDid: owner } : result;
   }
 
   // Facet export over RPC (InventoryFacet.exportTables) for GET /export.
@@ -341,52 +344,62 @@ export class PodRoot extends DurableObject {
     // Root-signed DID log publication (design s4.4-4.6). The WHOLE log is
     // fully verified as did:webvh v1.0 (did_log.js: SCID, hash chain,
     // pre-rotation, eddsa-jcs-2022 proofs, state.id) against OWNER_DID, so:
-    //   - Genesis (no stored log): the log's SCID must equal the SCID in
-    //     OWNER_DID, which binds the genesis updateKeys to the DID string --
-    //     nobody who lacks the owner's genesis can claim the pod first. The
-    //     request itself must also be signed by a key in that genesis.
-    //   - Later: request signed by the CURRENTLY STORED active updateKeys,
-    //     the new log must extend the stored one by prefix, and every new
-    //     entry must carry valid proofs by the keys the chain authorizes.
-    // Order is deliberate: the cheap request-signature check runs before the
-    // CPU-heavier full log verification, so unauthenticated callers cannot
-    // make the pod hash a 256 KiB log.
+    //   - Genesis (no stored log): the log is verified FIRST, and the keys
+    //     that must have signed the request are taken only from the VERIFIED
+    //     log (its SCID must equal the SCID in OWNER_DID, which binds the
+    //     genesis updateKeys to the DID string). Nothing is written to the
+    //     replay cache for a log that fails verification, so an anonymous
+    //     caller can neither claim the pod nor fill the owner's nonce rows.
+    //   - Later: the request is signed by the CURRENTLY STORED active
+    //     updateKeys (checked first, cheaply), the new log must extend the
+    //     stored one by prefix, and every new entry must verify.
+    // Body is capped (MAX_DID_LOG_BYTES) while streaming, before any hashing.
     app.put("/.well-known/did.jsonl", async (c) => {
       const owner = this.ownerDid();
       if (owner === null) return c.json({ error: "pod not set up" }, 409);
-      const raw = new Uint8Array(await c.req.raw.clone().arrayBuffer());
-      if (raw.length > MAX_DID_LOG_BYTES) return c.json({ error: "log too large" }, 413);
-      let text, submitted;
+      let raw;
+      try {
+        raw = await readBodyCapped(c.req.raw, MAX_DID_LOG_BYTES);
+      } catch (err) {
+        if (err instanceof BodyTooLarge) return c.json({ error: "log too large" }, 413);
+        throw err;
+      }
+      let text;
       try {
         text = new TextDecoder("utf-8", { fatal: true }).decode(raw);
-        const lines = text.split("\n").filter((l) => l.trim() !== "");
-        if (lines.length === 0 || lines.length > MAX_DID_LOG_ENTRIES) throw new Error("bad entry count");
-        submitted = lines.map((l) => JSON.parse(l));
       } catch {
-        return c.json({ error: "log is not valid UTF-8 JSONL" }, 400);
+        return c.json({ error: "log is not valid UTF-8" }, 400);
       }
+      const desc = await describeRequest(c.req.raw, { bodyBytes: raw });
       const stored = this.loadDidLogText();
+      let verified = null;
       let authKeys;
-      try {
-        authKeys = stored === null ? activeUpdateKeys(submitted) : activeUpdateKeys(storedEntries(stored));
-      } catch {
-        return c.json({ error: "log is malformed" }, 400);
+      if (stored === null) {
+        try {
+          verified = await verifyDidLog(owner, text);
+        } catch (err) {
+          return c.json({ error: err instanceof InvalidDidLog ? err.message : "log failed verification" }, 400);
+        }
+        authKeys = verified.activeUpdateKeys;
+      } else {
+        authKeys = activeUpdateKeys(storedEntries(stored));
       }
       const auth = await verifySignedRequest({
-        desc: await describeRequest(c.req.raw),
+        desc,
         audience: owner,
         resolveKeys: async (did) => (did === owner ? authKeys : []),
         sql: (q, ...b) => this.sql(q, ...b),
       });
       if (!auth.ok) return c.json({ error: auth.error }, auth.status);
-      if (stored !== null && !extendsLog(stored, text)) {
-        return c.json({ error: "new log must extend the stored log" }, 409);
-      }
-      let verified;
-      try {
-        verified = await verifyDidLog(owner, text);
-      } catch (err) {
-        return c.json({ error: err instanceof InvalidDidLog ? err.message : "log failed verification" }, 400);
+      if (stored !== null) {
+        if (!extendsLog(stored, text)) {
+          return c.json({ error: "new log must extend the stored log" }, 409);
+        }
+        try {
+          verified = await verifyDidLog(owner, text);
+        } catch (err) {
+          return c.json({ error: err instanceof InvalidDidLog ? err.message : "log failed verification" }, 400);
+        }
       }
       if (verified.activeUpdateKeys.includes(this.serviceKey.publicMultikey)) {
         return c.json({ error: "the service key must not be an updateKey" }, 400);
@@ -546,6 +559,12 @@ export default {
     }
     if (!route.public && !request.headers.get(AUTH_HEADER_NAMES.signature)) {
       return _UNAUTHENTICATED();
+    }
+    // Cheap declared-size reject before any DO wakes; the DO re-enforces the
+    // cap on the actual bytes (chunked bodies carry no Content-Length).
+    const declared = request.headers.get("content-length");
+    if (declared !== null && Number(declared) > (route.maxBody ?? DEFAULT_MAX_BODY_BYTES)) {
+      return new Response(JSON.stringify({ error: "request body too large" }), { status: 413, headers: { "content-type": "application/json" } });
     }
     if (route.binding === "INVENTORY_FACET") {
       const id = env.INVENTORY_FACET.idFromName("inventory");

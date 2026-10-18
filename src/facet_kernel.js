@@ -25,7 +25,7 @@
 import { zValidator } from "@hono/zod-validator";
 import { evaluatePolicy, recordPresentedReceipt } from "./policy.js";
 import { RequestAuthHeaderSchema } from "./schemas.js";
-import { describeRequest } from "./signed_request.js";
+import { describeRequest, BodyTooLarge } from "./signed_request.js";
 import { createScopedQuery, ScopeDenied } from "./scoped_query.js";
 import { getStanding, isBlocked, deriveBanScope } from "./registry_authority_status.js";
 
@@ -51,7 +51,7 @@ const identityHeaderHook = (result, c) => {
 //   choke point may touch for non-owner principals (scoped_query.js).
 // Returns { requirePolicy, protectedRoute }, bound to this one DO's own
 // storage and owner -- never shared across DO instances or DO classes.
-export function createFacetKernel({ sql, getOwnerDid, verifyRequest, tables = {} }) {
+export function createFacetKernel({ sql, getOwnerDid, verifyRequest, ensureReady, tables = {} }) {
   const scopedQuery = createScopedQuery({ sql, tables });
 
   // See PodRoot's own historical doc comment (git blame index.js) for the
@@ -71,14 +71,24 @@ export function createFacetKernel({ sql, getOwnerDid, verifyRequest, tables = {}
       }
       // Identity comes ONLY from the verified signature (BL#18122) -- the
       // principal is whatever verifyRequest() proved, never a bare header.
-      const auth = await verifyRequest(await describeRequest(c.req.raw));
+      let desc;
+      try {
+        desc = await describeRequest(c.req.raw);
+      } catch (err) {
+        if (err instanceof BodyTooLarge) return c.json({ error: "request body too large" }, 413);
+        throw err;
+      }
+      const auth = await verifyRequest(desc);
       if (!auth.ok) {
         return c.json({ error: auth.error }, auth.status);
       }
-      const owner = getOwnerDid();
-      if (owner === null) {
+      // The owner is whatever the authenticating authority (PodRoot) says --
+      // a facet never derives it from env or from its own stored copy.
+      const owner = auth.ownerDid ?? getOwnerDid();
+      if (owner === null || owner === undefined) {
         return c.json({ error: "pod not set up" }, 409);
       }
+      if (ensureReady) await ensureReady(owner);
       const principalDid = auth.principalDid;
       const receiptScope = headers["x-presented-receipt-scope"];
       if (receiptScope) {
@@ -100,6 +110,7 @@ export function createFacetKernel({ sql, getOwnerDid, verifyRequest, tables = {}
       // to THIS request's grant predicates, and raw sql is not exposed.
       const scope = { isOwner, resource, predicates: result.predicates };
       c.set("principalDid", principalDid);
+      c.set("ownerDid", owner);
       c.set("isOwner", isOwner);
       c.set("scoped", {
         select: (table, opts) => scopedQuery.select(scope, table, opts),

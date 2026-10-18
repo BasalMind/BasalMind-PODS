@@ -22,14 +22,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check the owner DID looks like a DID
+      - name: Check the owner DID is a well-formed did:webvh
         env:
           OWNER_DID: ${{ inputs.owner_did }}
         run: |
-          case "$OWNER_DID" in
-            did:*) ;;
-            *) echo "owner_did must start with did:"; exit 1 ;;
-          esac
+          if ! printf '%s' "$OWNER_DID" | grep -Eq '^did:webvh:[A-Za-z0-9]+(:[A-Za-z0-9._%-]+)+$'; then
+            echo "owner_did must look like did:webvh:<SCID>:<domain>[:<path>...]"
+            exit 1
+          fi
 
       - name: Deploy pod-root to your Cloudflare account
         uses: cloudflare/wrangler-action@v4

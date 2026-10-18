@@ -23,7 +23,13 @@ export function base58btcEncode(bytes) {
   return out;
 }
 
+// base58 decoding is quadratic (BigInt), so inputs are length-capped: every
+// legitimate caller (multikeys ~48 chars, 64-byte signatures ~88 chars) is
+// far below this.
+export const MAX_BASE58_INPUT = 128;
+
 export function base58btcDecode(s) {
+  if (typeof s !== "string" || s.length > MAX_BASE58_INPUT) throw new Error("base58 input too long");
   let num = 0n;
   for (const ch of s) {
     const idx = BASE58BTC_ALPHABET.indexOf(ch);
@@ -42,6 +48,8 @@ export function base58btcDecode(s) {
   return new Uint8Array(bytes);
 }
 
+export const MAX_MULTIKEY_LEN = 64;
+
 export function encodeEd25519Multikey(rawPublicKey) {
   if (rawPublicKey.length !== 32) throw new Error("Ed25519 public key must be 32 bytes");
   const prefixed = new Uint8Array(34);
@@ -53,7 +61,7 @@ export function encodeEd25519Multikey(rawPublicKey) {
 
 // Throws on anything that is not a well-formed Ed25519 multikey.
 export function decodeEd25519Multikey(multikey) {
-  if (typeof multikey !== "string" || !multikey.startsWith("z")) {
+  if (typeof multikey !== "string" || multikey.length > MAX_MULTIKEY_LEN || !multikey.startsWith("z")) {
     throw new Error("multikey must use the 'z' (base58btc) multibase prefix");
   }
   const decoded = base58btcDecode(multikey.slice(1));

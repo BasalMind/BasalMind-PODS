@@ -24,10 +24,50 @@ export const SKEW_SECONDS = 300;
 // accepted: a request stamped at (now + SKEW) stays acceptable until
 // (now + 2*SKEW). Plus a minute of slack.
 export const NONCE_TTL_SECONDS = 2 * SKEW_SECONDS + 60;
-// Hard cap on remembered nonces. Only requests with a VALID signature ever
-// insert a row (see verifySignedRequest), so this bounds a compromised or
-// misbehaving legitimate principal, not anonymous callers.
-export const MAX_NONCE_ROWS = 5000;
+// Replay-cache bounds. Rows are only ever inserted AFTER a signature verified
+// against a key the pod trusts for that principal (see verifySignedRequest),
+// so only a key-holding principal can add rows -- anonymous callers cannot.
+// The caps therefore bound what ONE legitimate-but-misbehaving principal can
+// do: per principal, so it can only exhaust its own budget (never evict --
+// evicting a live nonce would reopen replay), plus a global ceiling that
+// applies to everyone EXCEPT the pod owner, so the owner can never be locked
+// out by other principals' rows.
+export const MAX_NONCE_ROWS_PER_PRINCIPAL = 1000;
+export const MAX_NONCE_ROWS_GLOBAL = 20000;
+
+// Request-body bounds (enforced before any hashing/auth work).
+export const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
+export class BodyTooLarge extends Error {}
+
+// Reads a request body into memory but aborts (cancelling the stream) the
+// moment more than maxBytes have arrived, so a chunked body with no
+// Content-Length cannot be buffered without limit. A declared Content-Length
+// over the cap is refused before reading anything.
+export async function readBodyCapped(request, maxBytes) {
+  const declared = request.headers.get("content-length");
+  if (declared !== null && Number(declared) > maxBytes) throw new BodyTooLarge();
+  if (!request.body) return new Uint8Array(0);
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new BodyTooLarge();
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    out.set(c, off);
+    off += c.byteLength;
+  }
+  return out;
+}
 
 export const AUTH_HEADER_NAMES = {
   principal: "x-bm-principal",
@@ -49,9 +89,11 @@ export function requestPreimage({ principal, method, pathAndQuery, bodySha256, t
 // verifySignedRequest() consumes. Plain object on purpose: a facet DO
 // passes it to PodRoot over Workers RPC. `headers` is any object with
 // .get(name) (Headers or Hono's header reader).
-export async function describeRequest(request) {
+// Throws BodyTooLarge past maxBytes. Pass bodyBytes when the caller already
+// read the (capped) body itself.
+export async function describeRequest(request, { maxBytes = DEFAULT_MAX_BODY_BYTES, bodyBytes } = {}) {
   const url = new URL(request.url);
-  const bodyBytes = new Uint8Array(await request.clone().arrayBuffer());
+  bodyBytes = bodyBytes ?? (await readBodyCapped(request.clone(), maxBytes));
   const h = request.headers;
   return {
     method: request.method.toUpperCase(),
@@ -115,10 +157,11 @@ export async function verifySignedRequest({ desc, audience, resolveKeys, sql, no
   try {
     keys = await resolveKeys(principal);
   } catch {
-    return fail(401, "could not resolve principal keys");
+    return fail(401, "authentication failed");
   }
   if (!Array.isArray(keys) || keys.length === 0) {
-    return fail(401, "unknown principal");
+    // Same answer as a bad signature: do not reveal which principals exist.
+    return fail(401, "authentication failed");
   }
 
   const preimage = requestPreimage({
@@ -137,14 +180,20 @@ export async function verifySignedRequest({ desc, audience, resolveKeys, sql, no
       break;
     }
   }
-  if (!verified) return fail(401, "bad signature");
+  if (!verified) return fail(401, "authentication failed");
 
   // Replay cache. DO execution is single-threaded between awaits, and the
   // check-and-insert below is synchronous, so two concurrent copies of the
   // same request cannot both pass.
   sql(`DELETE FROM request_nonces WHERE expires_at < ?;`, nowSec);
-  const count = [...sql(`SELECT COUNT(*) AS n FROM request_nonces;`)][0].n;
-  if (count >= MAX_NONCE_ROWS) return fail(429, "too many recent requests");
+  const own = [...sql(`SELECT COUNT(*) AS n FROM request_nonces WHERE principal_did = ?;`, principal)][0].n;
+  if (own >= MAX_NONCE_ROWS_PER_PRINCIPAL) return fail(429, "too many recent requests");
+  if (principal !== audience) {
+    // The owner (principal === audience, the pod DID) is exempt from the
+    // global ceiling so other principals' rows can never lock it out.
+    const total = [...sql(`SELECT COUNT(*) AS n FROM request_nonces;`)][0].n;
+    if (total >= MAX_NONCE_ROWS_GLOBAL) return fail(429, "too many recent requests");
+  }
   try {
     sql(`INSERT INTO request_nonces (principal_did, nonce, expires_at) VALUES (?, ?, ?);`, principal, nonce, nowSec + NONCE_TTL_SECONDS);
   } catch {

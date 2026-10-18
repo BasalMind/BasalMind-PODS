@@ -20,7 +20,7 @@
 // Pod-only additions on top of the Python semantics (stricter, never looser):
 // size/entry-count caps, and the active updateKeys must be a non-empty list
 // of well-formed Ed25519 multikeys.
-import { base58btcEncode, base58btcDecode, decodeEd25519Multikey, verifyEd25519 } from "./encoding.js";
+import { base58btcEncode, base58btcDecode, decodeEd25519Multikey, verifyEd25519, MAX_MULTIKEY_LEN, MAX_BASE58_INPUT } from "./encoding.js";
 
 export const MAX_DID_LOG_BYTES = 256 * 1024;
 export const MAX_DID_LOG_ENTRIES = 256;
@@ -61,7 +61,9 @@ function substituteLiteral(obj, target, replacement) {
   if (typeof obj === "string") return obj.split(target).join(replacement);
   if (Array.isArray(obj)) return obj.map((i) => substituteLiteral(i, target, replacement));
   if (obj !== null && typeof obj === "object") {
-    const out = {};
+    // Null-prototype so a JSON key named "__proto__" stays an ordinary own
+    // key (as in Python) instead of rewriting the object's prototype.
+    const out = Object.create(null);
     for (const [k, v] of Object.entries(obj)) out[k] = substituteLiteral(v, target, replacement);
     return out;
   }
@@ -101,7 +103,9 @@ async function verifyHashChain(log, scid) {
 }
 
 async function multikeyHash(multikey) {
-  if (typeof multikey !== "string" || !multikey.startsWith("z")) throw new InvalidDidLog("bad multikey");
+  if (typeof multikey !== "string" || multikey.length > MAX_MULTIKEY_LEN || !multikey.startsWith("z")) {
+    throw new InvalidDidLog("bad multikey");
+  }
   return multihashB58(enc.encode(multikey));
 }
 
@@ -150,7 +154,7 @@ function authorizedKeysForEntry(log, index) {
 
 function parseDidKeyVm(vm) {
   const prefix = "did:key:";
-  if (typeof vm !== "string" || !vm.startsWith(prefix) || !vm.includes("#")) return null;
+  if (typeof vm !== "string" || vm.length > 2 * MAX_MULTIKEY_LEN + 16 || !vm.startsWith(prefix) || !vm.includes("#")) return null;
   const rest = vm.slice(prefix.length);
   const hash = rest.indexOf("#");
   const body = rest.slice(0, hash);
@@ -168,7 +172,7 @@ async function verifyProof(unsecured, proof, authorized) {
   if (proofPurpose !== "assertionMethod") return false;
   const multikey = parseDidKeyVm(verificationMethod);
   if (multikey === null || !authorized.includes(multikey)) return false;
-  if (typeof proofValue !== "string" || !proofValue.startsWith("z")) return false;
+  if (typeof proofValue !== "string" || proofValue.length > MAX_BASE58_INPUT || !proofValue.startsWith("z")) return false;
   let sig;
   try {
     sig = base58btcDecode(proofValue.slice(1));
@@ -202,6 +206,26 @@ async function verifyEntryProofs(log) {
   }
 }
 
+// Shape/size guard on the two parameters that carry key material, run BEFORE
+// any hashing or decoding. Python rejects (via exceptions) a truthy non-list
+// nextKeyHashes/updateKeys; here any non-null non-array is rejected outright,
+// and lists are capped so attacker-supplied key material cannot burn CPU.
+function checkKeyParameters(log) {
+  for (let i = 0; i < log.length; i++) {
+    const params = log[i].parameters;
+    if (params === undefined || params === null) continue;
+    if (typeof params !== "object" || Array.isArray(params)) throw new InvalidDidLog(`entry ${i + 1}: parameters is not an object`);
+    for (const name of ["updateKeys", "nextKeyHashes"]) {
+      const v = params[name];
+      if (v === undefined || v === null) continue;
+      if (!Array.isArray(v) || v.length > MAX_UPDATE_KEYS) throw new InvalidDidLog(`entry ${i + 1}: ${name} must be a short array`);
+      for (const k of v) {
+        if (typeof k !== "string" || k.length > MAX_MULTIKEY_LEN) throw new InvalidDidLog(`entry ${i + 1}: ${name} contains an oversized or non-string value`);
+      }
+    }
+  }
+}
+
 // Verifies parsed entries against `did`. Returns { scid, activeUpdateKeys }.
 // Throws InvalidDidLog on ANY failure, including unexpected shapes.
 export async function verifyDidLogEntries(did, log) {
@@ -211,6 +235,7 @@ export async function verifyDidLogEntries(did, log) {
     for (const e of log) {
       if (e === null || typeof e !== "object" || Array.isArray(e)) throw new InvalidDidLog("entry is not an object");
     }
+    checkKeyParameters(log);
     const scid = extractClaimedScid(did);
     await verifyScid(log[0], scid);
     await verifyHashChain(log, scid);

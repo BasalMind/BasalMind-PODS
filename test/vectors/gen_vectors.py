@@ -58,12 +58,18 @@ def append(log, params, state_extra, signer, **signkw):
     return log + [e]
 
 cases = []
-def add(name, did, log):
+def add(name, did, log, expected_disagreement=None):
     try:
         v.verify_log(did, log); ok = True
-    except v.MalformedLog:
+    except Exception:  # core treats any exception as reject
         ok = False
-    cases.append({"name": name, "did": did, "log": log, "valid": ok})
+    c = {"name": name, "did": did, "log": log, "valid": ok}
+    if expected_disagreement:
+        c["expected_disagreement"] = expected_disagreement
+    cases.append(c)
+
+def proof_of(entry, signer, **kw):
+    return sign({k: x for k, x in entry.items() if k != "proof"}, signer, **kw)
 
 def base(next_hashes=None, signer=A, **kw):
     scid, g = genesis([A[1]], next_hashes, signer, **kw)
@@ -104,6 +110,40 @@ add("prerotation_uncommitted_key", did, append(log, {"updateKeys": [C[1]], "next
 add("prerotation_missing_next_key_hashes", did, append(log, {"updateKeys": [B[1]]}, {}, B))
 add("prerotation_missing_update_keys", did, append(log, {"nextKeyHashes": [mh(C[1])]}, {}, A))
 add("prerotation_signed_by_old_key", did, append(log, {"updateKeys": [B[1]], "nextKeyHashes": [mh(C[1])]}, {}, A))
+
+# --- non-array key parameters (JS must reject like Python)
+scid, g = genesis([A[1]], "junk", A); l = append([g], {}, {}, A)
+add("next_key_hashes_string_then_omitted", g["state"]["id"], l)
+scid, g = genesis([A[1]], [], A); g2 = copy.deepcopy(g); g2["parameters"]["updateKeys"] = A[1]
+add("update_keys_is_string", g2["state"]["id"], [g2])
+# --- rotation A->B, then an entry signed by A (old key) is rejected; by B accepted
+scid, did, log = base()
+rot = append(log, {"updateKeys": [B[1]]}, {}, A)
+add("after_rotation_entry_signed_by_old_key", did, append(rot, {}, {}, A))
+add("after_rotation_entry_signed_by_new_key", did, append(rot, {}, {}, B))
+# --- multi-proof
+scid, did, log = base(next_hashes=[])
+e2 = append(log, {}, {}, A); good = e2[-1]["proof"][0]
+bad = proof_of(e2[-1], C, vm_key=A[1])  # claims A, signed by C
+malformed = {"type": "DataIntegrityProof"}
+for name, proofs in [("multi_proof_bad_then_good", [bad, good]), ("multi_proof_good_then_malformed", [good, malformed]),
+                     ("multi_proof_malformed_then_good", [malformed, good]), ("multi_proof_all_bad", [bad, bad])]:
+    t = copy.deepcopy(e2); t[-1]["proof"] = proofs; add(name, did, t)
+# --- pre-rotation deactivation sequence
+scid, did, log = base(next_hashes=[mh(B[1])])
+deact = append(log, {"updateKeys": [B[1]], "nextKeyHashes": []}, {}, B)
+add("deactivate_prerotation_then_free_rotation", did, append(deact, {"updateKeys": [C[1]]}, {}, B))
+add("deactivate_prerotation_then_signed_by_new_key", did, append(deact, {"updateKeys": [C[1]]}, {}, C))
+# --- __proto__ key in state must not change the verdict
+scid, did, log = base(next_hashes=[])
+t = copy.deepcopy(log); st = {"id": did, "__proto__": {"x": 1}}
+# build properly signed entry 2 containing a literal "__proto__" key
+e = {"versionId": log[-1]["versionId"], "versionTime": "2026-10-18T01:00:00Z", "parameters": {}, "state": st}
+e["versionId"] = "2-" + h(e); e["proof"] = [proof_of(e, A)]
+add("proto_key_in_state", did, log + [e])
+# --- KNOWN DISAGREEMENT: non-BMP vs high-BMP sibling keys (core sorts by code point, RFC 8785 by UTF-16)
+scid, g = genesis([A[1]], [], A, extra_state={"\ufb01": 1, "\U0001F600": 2})
+add("nonbmp_key_order_known_disagreement", g["state"]["id"], [g], expected_disagreement="core sorts keys by code point; RFC 8785 (JS) by UTF-16 code unit. Core bug filed separately")
 
 json.dump({"keys": {"A": A[1], "B": B[1], "C": C[1]}, "cases": cases}, open("test/vectors/did_log_vectors.json", "w"), indent=1)
 for c in cases: print(("ACCEPT " if c["valid"] else "REJECT ") + c["name"])

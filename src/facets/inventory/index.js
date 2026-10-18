@@ -78,22 +78,22 @@ export class InventoryFacet extends DurableObject {
       // also uses.
       verifyRequest: (desc) =>
         this.env.POD_ROOT.get(this.env.POD_ROOT.idFromName("pod-root")).verifyRequest(desc),
+      // Schema bootstrap on a facet reached before PodRoot's own setup ran;
+      // the owner passed in came from PodRoot, not from this DO's env.
+      ensureReady: async (ownerDid) => {
+        if (this.ownerDid() === null) await this.setup(ownerDid);
+      },
       tables: INVENTORY_TABLES,
     });
     this.requirePolicy = kernel.requirePolicy;
     this.protectedRoute = kernel.protectedRoute;
     this.app = this.buildApp();
-    // Lazy self-init from the OWNER_DID binding (S1), single-flight. PodRoot
-    // still drives setup() on its own first boot; this just means the facet
-    // can never be left owner-less if it is reached first.
+    // Pods created before the ledger moved into triggers get them on the
+    // next activation (idempotent DDL). The owner is NEVER taken from env:
+    // PodRoot's verifyRequest() supplies it per request (facet_kernel.js).
     ctx.blockConcurrencyWhile(async () => {
-      // Pods created before the ledger moved into triggers get them on the
-      // next activation (idempotent DDL).
       if (this.ownerDid() !== null) {
         for (const ddl of LEDGER_TRIGGERS) this.sql(ddl);
-      }
-      if (this.ownerDid() === null && typeof env.OWNER_DID === "string" && env.OWNER_DID.startsWith("did:")) {
-        await this.setup(env.OWNER_DID);
       }
     });
   }
@@ -298,18 +298,23 @@ export class InventoryFacet extends DurableObject {
       // Idempotent replay: read through the scoped handle (a key used by a
       // movement outside this principal's scope is invisible here and falls
       // through to the UNIQUE violation below -> 409).
+      // Non-owners get ONE uniform 409 for every conflict (insufficient
+      // stock, key reuse, unknown sku): distinct messages would be an oracle
+      // for stock levels, other principals' idempotency keys, and sku
+      // existence beyond their grant. The owner keeps the detailed errors.
+      const conflict = (detail, status = 409) =>
+        c.json({ error: isOwner ? detail : "movement rejected" }, isOwner ? status : 409);
       const existing = scoped.select("inventory_movement", { where: `"idempotency_key" = ?`, params: [body.idempotency_key] })[0];
       if (existing) {
         if (existing.sku !== body.sku || existing.kind !== body.kind || existing.quantity_delta !== body.quantity_delta) {
-          return c.json({
-            error: `idempotency_key ${JSON.stringify(body.idempotency_key)} was already used for a different movement ` +
+          return conflict(
+            `idempotency_key ${JSON.stringify(body.idempotency_key)} was already used for a different movement ` +
               `(sku=${JSON.stringify(existing.sku)}, kind=${JSON.stringify(existing.kind)}, quantity_delta=${existing.quantity_delta}) -- ` +
               `reusing a key across different movements is a caller bug, not a safe retry.`,
-          }, 409);
+          );
         }
         return c.json({ ok: true, idempotent: true, movementSeq: existing.movement_seq, balance: balanceOf(existing.sku) }, 200);
       }
-
       // ONE scoped insert: the choke point checks the row against the
       // grant's predicate, and the schema's AFTER INSERT triggers
       // (ledger.js) maintain balance + alert atomically with it.
@@ -325,13 +330,13 @@ export class InventoryFacet extends DurableObject {
       } catch (err) {
         const msg = String(err.message || err);
         if (msg.includes("FOREIGN KEY")) {
-          return c.json({ error: `no inventory_item with sku ${JSON.stringify(body.sku)}` }, 400);
+          return conflict(`no inventory_item with sku ${JSON.stringify(body.sku)}`, 400);
         }
         if (msg.includes("idempotency_key")) {
-          return c.json({ error: `idempotency_key ${JSON.stringify(body.idempotency_key)} is already in use` }, 409);
+          return conflict(`idempotency_key ${JSON.stringify(body.idempotency_key)} is already in use`);
         }
         if (msg.includes("chk_inventory_balance_non_negative")) {
-          return c.json({ error: "insufficient stock" }, 409);
+          return conflict("insufficient stock");
         }
         throw err;
       }
@@ -357,7 +362,7 @@ export class InventoryFacet extends DurableObject {
       const body = c.req.valid("json");
       try {
         upsertPolicyGrant((q, ...b) => this.sql(q, ...b), {
-          ownerDid: this.ownerDid(),
+          ownerDid: c.get("ownerDid"),
           editorDid: c.get("principalDid"),
           grantId: body.grant_id,
           principalDid: body.principal_did,
