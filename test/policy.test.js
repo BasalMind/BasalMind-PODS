@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import { describe, it, expect, vi } from "vitest";
+import { OWNER_DID, STRANGER_DID, owner, stranger, signedFetch, freshPod, publishOwnerLog } from "./helpers.js";
 
 // This file tests policy.js's own authorization decisions, not the
 // standing-veto layer (registry_authority_status.test.js already covers
@@ -14,30 +15,20 @@ vi.mock("../src/registry_authority_status.js", async (importOriginal) => {
   return { ...actual, getStanding: async () => ({ verdict: "active", restricted_scopes: [], source: "mocked-clean" }) };
 });
 
-const OWNER = "did:webvh:owner-scid:example.com:persons:alice";
-const STRANGER = "did:webvh:stranger-scid:example.com:persons:bob";
-
-async function freshPod(name) {
-  const id = env.POD_ROOT.idFromName(name);
-  const stub = env.POD_ROOT.get(id);
-  await stub.fetch("http://pod/setup", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ owner_did: OWNER }),
-  });
-  return stub;
-}
+// Callers now authenticate with a SIGNED request (BL#18122), not an
+// asserted X-Principal-Did header: SIGNERS maps each test DID to its
+// deterministic key (test/test_keys.js, pinned/log-published in config).
+const OWNER = OWNER_DID;
+const STRANGER = STRANGER_DID;
+const SIGNERS = { [OWNER]: await owner(), [STRANGER]: await stranger() };
 
 function getFacets(stub, principalDid, receiptScope) {
-  const headers = principalDid ? { "X-Principal-Did": principalDid } : {};
-  if (receiptScope) headers["X-Presented-Receipt-Scope"] = receiptScope;
-  return stub.fetch("http://pod/facets", { headers });
+  const headers = receiptScope ? { "X-Presented-Receipt-Scope": receiptScope } : {};
+  return signedFetch(stub, principalDid ? SIGNERS[principalDid] : undefined, "/facets", { headers });
 }
 
 function putGrant(stub, editorDid, grant) {
-  const headers = { "content-type": "application/json" };
-  if (editorDid) headers["X-Principal-Did"] = editorDid;
-  return stub.fetch("http://pod/policy/grants", { method: "POST", headers, body: JSON.stringify(grant) });
+  return signedFetch(stub, editorDid ? SIGNERS[editorDid] : undefined, "/policy/grants", { method: "POST", body: grant });
 }
 
 describe("pod-local policy authorization", () => {
@@ -56,17 +47,19 @@ describe("pod-local policy authorization", () => {
     expect((await res.json()).reason).toBe("no_matching_grant");
   });
 
-  it("missing X-Principal-Did is rejected before any policy check runs", async () => {
+  it("an unsigned request is rejected before any policy check runs", async () => {
     const stub = await freshPod("policy-no-principal");
     const res = await getFacets(stub, undefined);
     expect(res.status).toBe(401);
   });
 
-  it("querying a protected route before pod setup returns 409, not a crash", async () => {
-    const id = env.POD_ROOT.idFromName("policy-not-set-up");
-    const stub = env.POD_ROOT.get(id);
-    const res = await getFacets(stub, STRANGER);
-    expect(res.status).toBe(409);
+  it("before the owner's DID log is published nobody can authenticate as the owner -- 401, not a crash and not a bypass", async () => {
+    // Pods initialize themselves on first boot, so the old "not set up"
+    // 409 no longer exists for a configured pod; the equivalent state is
+    // "initialized, but no root key published yet".
+    const stub = env.POD_ROOT.get(env.POD_ROOT.idFromName("policy-no-log-yet"));
+    const res = await getFacets(stub, OWNER);
+    expect(res.status).toBe(401);
   });
 
   it("an explicit allow grant permits a non-owner", async () => {
@@ -173,9 +166,8 @@ describe("Zod boundary validation (clean rewrite, 2026-08-31)", () => {
 
   it("omitting expires_at entirely is rejected at the boundary -- 400, not a silently-permanent grant", async () => {
     const stub = await freshPod("zod-missing-expires-at");
-    const headers = { "content-type": "application/json", "X-Principal-Did": OWNER };
     const body = JSON.stringify({ grant_id: "g1", principal_did: STRANGER, action: "a", resource: "r", effect: "allow" });
-    const res = await stub.fetch("http://pod/policy/grants", { method: "POST", headers, body });
+    const res = await signedFetch(stub, SIGNERS[OWNER], "/policy/grants", { method: "POST", body });
     expect(res.status).toBe(400);
   });
 
@@ -199,23 +191,13 @@ describe("Zod boundary validation (clean rewrite, 2026-08-31)", () => {
 
   it("malformed JSON body on /policy/grants is a clean 400, not a raw exception", async () => {
     const stub = await freshPod("zod-malformed-json");
-    const res = await stub.fetch("http://pod/policy/grants", {
-      method: "POST",
-      headers: { "content-type": "application/json", "X-Principal-Did": OWNER },
-      body: "{not valid json",
-    });
+    const res = await signedFetch(stub, SIGNERS[OWNER], "/policy/grants", { method: "POST", body: "{not valid json" });
     expect(res.status).toBe(400);
   });
 
-  it("a missing X-Principal-Did on /setup is fine (setup doesn't require identity) but /facets still 401s", async () => {
-    const id = env.POD_ROOT.idFromName("zod-setup-no-header");
-    const stub = env.POD_ROOT.get(id);
-    const setupRes = await stub.fetch("http://pod/setup", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ owner_did: OWNER }),
-    });
-    expect(setupRes.status).toBe(200);
+  it("/status needs no signature, but /facets still 401s without one", async () => {
+    const stub = await freshPod("zod-status-no-signature");
+    expect((await stub.fetch("http://pod/status")).status).toBe(200);
     expect((await getFacets(stub, undefined)).status).toBe(401);
   });
 });

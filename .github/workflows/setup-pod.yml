@@ -8,7 +8,12 @@ name: Setup Pod
 # Manually triggered, not run on every push -- setting up a pod is a
 # deliberate action the owner takes, not a side effect of editing a README.
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      owner_did:
+        description: "Your pod DID (did:webvh:...). Bound as OWNER_DID; the pod initializes itself from it on first boot and the owner can never be changed afterwards."
+        required: true
+        type: string
 
 jobs:
   deploy:
@@ -17,13 +22,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check the owner DID is a well-formed did:webvh
+        env:
+          OWNER_DID: ${{ inputs.owner_did }}
+        run: |
+          if ! printf '%s' "$OWNER_DID" | grep -Eq '^did:webvh:[A-Za-z0-9]+(:[A-Za-z0-9._%-]+)+$'; then
+            echo "owner_did must look like did:webvh:<SCID>:<domain>[:<path>...]"
+            exit 1
+          fi
+
       - name: Deploy pod-root to your Cloudflare account
         uses: cloudflare/wrangler-action@v4
+        env:
+          OWNER_DID: ${{ inputs.owner_did }}
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: "4.129.1"
+          vars: OWNER_DID
 
       - name: Confirm the pod answers
         run: |
-          echo "Deployed. Visit your Worker's *.workers.dev URL + /setup, then /status, to confirm."
+          echo "Deployed. The pod initializes itself on first boot. Visit your Worker's *.workers.dev URL + /status to confirm and read its public service_key."

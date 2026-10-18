@@ -22,8 +22,9 @@ import { setupPolicyTables, upsertPolicyGrant, PolicyEditForbidden } from "../..
 import { PolicyGrantSchema } from "../../schemas.js";
 import { setupStatusCacheTable } from "../../registry_authority_status.js";
 import { createFacetKernel } from "../../facet_kernel.js";
+import { dumpTables } from "../../export.js";
 import { InventoryItemCreateSchema, InventoryItemUpdateSchema, MovementSchema } from "./schemas.js";
-import { applyMovement, evaluateReorderAlerts, UnknownSku, IdempotencyKeyCollision } from "./ledger.js";
+import { evaluateReorderAlerts, LEDGER_TRIGGERS } from "./ledger.js";
 
 // No basis in any design doc for this figure -- an hourly sweep is a
 // reasonable default per the plan's own "small decisions during the
@@ -32,6 +33,28 @@ import { applyMovement, evaluateReorderAlerts, UnknownSku, IdempotencyKeyCollisi
 // stock with no movement recorded) -- not on any customer-facing latency
 // path.
 const REORDER_ALARM_INTERVAL_MS = 60 * 60 * 1000;
+
+// Tables the scoped-query choke point may touch for NON-owner principals
+// (scoped_query.js). A grant's row predicate may name only these columns of
+// its own resource's table.
+const INVENTORY_TABLES = {
+  inventory_item: {
+    pk: "sku",
+    columns: ["sku", "label", "supplier_vendor_key", "reorder_threshold", "reorder_quantity", "unit_cost_minor", "created_at", "updated_at"],
+  },
+  inventory_movement: {
+    pk: "movement_seq",
+    columns: ["movement_seq", "sku", "kind", "quantity_delta", "idempotency_key", "recorded_by", "recorded_at"],
+  },
+  inventory_balance: {
+    pk: "sku",
+    columns: ["sku", "quantity_on_hand", "last_movement_seq", "updated_at"],
+  },
+  inventory_reorder_alert: {
+    pk: "sku",
+    columns: ["sku", "status", "opened_at", "cleared_at"],
+  },
+};
 
 export class InventoryFacet extends DurableObject {
   constructor(ctx, env) {
@@ -49,10 +72,36 @@ export class InventoryFacet extends DurableObject {
     const kernel = createFacetKernel({
       sql: (q, ...b) => this.sql(q, ...b),
       getOwnerDid: () => this.ownerDid(),
+      // Authentication happens in PodRoot (it holds the owner's DID log and
+      // the replay cache); this facet asks it over Workers RPC on every
+      // request. Pod root is the fixed "pod-root" singleton the Worker entry
+      // also uses.
+      verifyRequest: (desc) =>
+        this.env.POD_ROOT.get(this.env.POD_ROOT.idFromName("pod-root")).verifyRequest(desc),
+      // Schema bootstrap on a facet reached before PodRoot's own setup ran;
+      // the owner passed in came from PodRoot, not from this DO's env.
+      ensureReady: async (ownerDid) => {
+        if (this.ownerDid() === null) await this.setup(ownerDid);
+      },
+      tables: INVENTORY_TABLES,
     });
     this.requirePolicy = kernel.requirePolicy;
     this.protectedRoute = kernel.protectedRoute;
     this.app = this.buildApp();
+    // Pods created before the ledger moved into triggers get them on the
+    // next activation (idempotent DDL). The owner is NEVER taken from env:
+    // PodRoot's verifyRequest() supplies it per request (facet_kernel.js).
+    ctx.blockConcurrencyWhile(async () => {
+      if (this.ownerDid() !== null) {
+        for (const ddl of LEDGER_TRIGGERS) this.sql(ddl);
+      }
+    });
+  }
+
+  // Read-only dump for PodRoot's GET /export (export.js). Reachable only
+  // through a Worker binding, never over HTTP.
+  exportTables() {
+    return dumpTables((q, ...b) => this.sql(q, ...b));
   }
 
   sql(query, ...bindings) {
@@ -148,6 +197,8 @@ export class InventoryFacet extends DurableObject {
       ) STRICT;
     `);
 
+    for (const ddl of LEDGER_TRIGGERS) this.sql(ddl);
+
     const existing = [...this.sql(`SELECT owner_did FROM facet_meta WHERE singleton = 1;`)][0];
     if (!existing) {
       this.sql(
@@ -188,104 +239,118 @@ export class InventoryFacet extends DurableObject {
     // must match the public path exactly.
     this.protectedRoute(app, "post", "/inventory/items", "inventory_item.write", "inventory_item", async (c) => {
       const body = c.req.valid("json");
+      const scoped = c.get("scoped");
       const now = new Date().toISOString();
       try {
-        this.sql(
-          `INSERT INTO inventory_item (sku, label, supplier_vendor_key, reorder_threshold, reorder_quantity, unit_cost_minor, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
-          body.sku, body.label, body.supplier_vendor_key ?? null,
-          body.reorder_threshold ?? 0, body.reorder_quantity ?? 0, body.unit_cost_minor ?? 0,
-          now, now,
-        );
+        scoped.insert("inventory_item", {
+          sku: body.sku,
+          label: body.label,
+          supplier_vendor_key: body.supplier_vendor_key ?? null,
+          reorder_threshold: body.reorder_threshold ?? 0,
+          reorder_quantity: body.reorder_quantity ?? 0,
+          unit_cost_minor: body.unit_cost_minor ?? 0,
+          created_at: now,
+          updated_at: now,
+        });
       } catch (err) {
         if (String(err.message || err).includes("UNIQUE")) {
           return c.json({ error: `sku ${JSON.stringify(body.sku)} already exists` }, 409);
         }
         throw err;
       }
-      // Deliberately NOT evaluating reorder alerts here -- creating an
-      // item is not a movement. A newly-created item with a nonzero
-      // reorder_threshold and no stock ever recorded is exactly the
-      // "threshold set with no movement" case the alarm sweep exists
-      // for, same as the update route below -- not duplicated here.
-      const item = [...this.sql(`SELECT * FROM inventory_item WHERE sku = ?;`, body.sku)][0];
+      // Read back through the same scoped handle: the row just written is,
+      // by the insert's own guard, inside this principal's scope.
+      const item = scoped.select("inventory_item", { where: `"sku" = ?`, params: [body.sku] })[0];
       return c.json({ ok: true, item }, 201);
     }, InventoryItemCreateSchema);
 
     this.protectedRoute(app, "post", "/inventory/items/update", "inventory_item.write", "inventory_item", async (c) => {
       const body = c.req.valid("json");
-      const existing = [...this.sql(`SELECT sku FROM inventory_item WHERE sku = ?;`, body.sku)][0];
-      if (!existing) {
+      const scoped = c.get("scoped");
+      // Same semantics as before the scoped-query refactor: omitted numeric
+      // fields and label keep their value; supplier_vendor_key is set to
+      // exactly what was sent (null when omitted).
+      const changes = { supplier_vendor_key: body.supplier_vendor_key ?? null, updated_at: new Date().toISOString() };
+      for (const col of ["label", "reorder_threshold", "reorder_quantity", "unit_cost_minor"]) {
+        if (body[col] !== undefined && body[col] !== null) changes[col] = body[col];
+      }
+      if (!scoped.update("inventory_item", body.sku, changes)) {
         return c.json({ error: `no inventory_item with sku ${JSON.stringify(body.sku)}` }, 404);
       }
-      const now = new Date().toISOString();
-      this.sql(
-        `UPDATE inventory_item SET
-           label = COALESCE(?, label),
-           supplier_vendor_key = ?,
-           reorder_threshold = COALESCE(?, reorder_threshold),
-           reorder_quantity = COALESCE(?, reorder_quantity),
-           unit_cost_minor = COALESCE(?, unit_cost_minor),
-           updated_at = ?
-         WHERE sku = ?;`,
-        body.label ?? null, body.supplier_vendor_key ?? null,
-        body.reorder_threshold ?? null, body.reorder_quantity ?? null, body.unit_cost_minor ?? null,
-        now, body.sku,
-      );
-      // Deliberately NOT evaluating reorder alerts here -- raising
-      // reorder_threshold above current stock with no movement recorded
-      // is exactly the edge case this facet's alarm() sweep exists to
-      // catch (see this class's own doc comment and the plan's
-      // "Reorder detection" section); evaluating it here would just be a
-      // second, redundant path to the same result the alarm already
-      // guarantees within one sweep interval.
-      const item = [...this.sql(`SELECT * FROM inventory_item WHERE sku = ?;`, body.sku)][0];
+      const item = scoped.select("inventory_item", { where: `"sku" = ?`, params: [body.sku] })[0];
       return c.json({ ok: true, item });
     }, InventoryItemUpdateSchema);
 
     this.protectedRoute(app, "get", "/inventory/items", "inventory_item.read", "inventory_item", async (c) => {
-      const items = [...this.sql(`SELECT * FROM inventory_item ORDER BY sku;`)];
+      const items = c.get("scoped").select("inventory_item", { orderBy: "sku" });
       return c.json({ items });
     });
 
     this.protectedRoute(app, "post", "/inventory/movements", "inventory_movement.write", "inventory_movement", async (c) => {
       const body = c.req.valid("json");
-      let result;
+      const scoped = c.get("scoped");
+      const isOwner = c.get("isOwner");
+      // Balance head is a different table/grant: only the owner's scope
+      // covers it, so a movement-only writer never sees stock levels.
+      const balanceOf = (sku) =>
+        isOwner ? scoped.select("inventory_balance", { where: `"sku" = ?`, params: [sku] })[0] : undefined;
+
+      // Idempotent replay: read through the scoped handle (a key used by a
+      // movement outside this principal's scope is invisible here and falls
+      // through to the UNIQUE violation below -> 409).
+      // Non-owners get ONE uniform 409 for every conflict (insufficient
+      // stock, key reuse, unknown sku): distinct messages would be an oracle
+      // for stock levels, other principals' idempotency keys, and sku
+      // existence beyond their grant. The owner keeps the detailed errors.
+      const conflict = (detail, status = 409) =>
+        c.json({ error: isOwner ? detail : "movement rejected" }, isOwner ? status : 409);
+      const existing = scoped.select("inventory_movement", { where: `"idempotency_key" = ?`, params: [body.idempotency_key] })[0];
+      if (existing) {
+        if (existing.sku !== body.sku || existing.kind !== body.kind || existing.quantity_delta !== body.quantity_delta) {
+          return conflict(
+            `idempotency_key ${JSON.stringify(body.idempotency_key)} was already used for a different movement ` +
+              `(sku=${JSON.stringify(existing.sku)}, kind=${JSON.stringify(existing.kind)}, quantity_delta=${existing.quantity_delta}) -- ` +
+              `reusing a key across different movements is a caller bug, not a safe retry.`,
+          );
+        }
+        return c.json({ ok: true, idempotent: true, movementSeq: existing.movement_seq, balance: balanceOf(existing.sku) }, 200);
+      }
+      // ONE scoped insert: the choke point checks the row against the
+      // grant's predicate, and the schema's AFTER INSERT triggers
+      // (ledger.js) maintain balance + alert atomically with it.
       try {
-        result = this.ctx.storage.transactionSync(() =>
-          applyMovement((q, ...b) => this.sql(q, ...b), {
-            sku: body.sku,
-            kind: body.kind,
-            quantityDelta: body.quantity_delta,
-            idempotencyKey: body.idempotency_key,
-            recordedBy: c.get("principalDid"),
-          }),
-        );
+        scoped.insert("inventory_movement", {
+          sku: body.sku,
+          kind: body.kind,
+          quantity_delta: body.quantity_delta,
+          idempotency_key: body.idempotency_key,
+          recorded_by: c.get("principalDid"),
+          recorded_at: new Date().toISOString(),
+        });
       } catch (err) {
-        if (err instanceof UnknownSku) {
-          return c.json({ error: err.message }, 400);
+        const msg = String(err.message || err);
+        if (msg.includes("FOREIGN KEY")) {
+          return conflict(`no inventory_item with sku ${JSON.stringify(body.sku)}`, 400);
         }
-        if (err instanceof IdempotencyKeyCollision) {
-          return c.json({ error: err.message }, 409);
+        if (msg.includes("idempotency_key")) {
+          return conflict(`idempotency_key ${JSON.stringify(body.idempotency_key)} is already in use`);
         }
-        if (String(err.message || err).includes("chk_inventory_balance_non_negative")) {
-          return c.json({ error: "insufficient stock" }, 409);
+        if (msg.includes("chk_inventory_balance_non_negative")) {
+          return conflict("insufficient stock");
         }
         throw err;
       }
-      // Idempotency replay returns 200-with-existing-record, never a 500
-      // or a silent double-count -- a POS retry after a timeout is the
-      // expected path, not an error.
-      return c.json({ ok: true, ...result }, result.idempotent ? 200 : 201);
+      const written = scoped.select("inventory_movement", { where: `"idempotency_key" = ?`, params: [body.idempotency_key] })[0];
+      return c.json({ ok: true, idempotent: false, movementSeq: written.movement_seq, balance: balanceOf(body.sku) }, 201);
     }, MovementSchema);
 
     this.protectedRoute(app, "get", "/inventory/balances", "inventory_balance.read", "inventory_balance", async (c) => {
-      const balances = [...this.sql(`SELECT * FROM inventory_balance ORDER BY sku;`)];
+      const balances = c.get("scoped").select("inventory_balance", { orderBy: "sku" });
       return c.json({ balances });
     });
 
     this.protectedRoute(app, "get", "/inventory/alerts/low-stock", "inventory_reorder_alert.read", "inventory_reorder_alert", async (c) => {
-      const alerts = [...this.sql(`SELECT * FROM inventory_reorder_alert WHERE status = 'open' ORDER BY sku;`)];
+      const alerts = c.get("scoped").select("inventory_reorder_alert", { where: `"status" = 'open'`, orderBy: "sku" });
       return c.json({ alerts });
     });
 
@@ -297,7 +362,7 @@ export class InventoryFacet extends DurableObject {
       const body = c.req.valid("json");
       try {
         upsertPolicyGrant((q, ...b) => this.sql(q, ...b), {
-          ownerDid: this.ownerDid(),
+          ownerDid: c.get("ownerDid"),
           editorDid: c.get("principalDid"),
           grantId: body.grant_id,
           principalDid: body.principal_did,
@@ -305,6 +370,7 @@ export class InventoryFacet extends DurableObject {
           resource: body.resource,
           effect: body.effect,
           expiresAt: body.expires_at,
+          rowPredicate: body.row_predicate ?? null,
         });
         return c.json({ ok: true });
       } catch (err) {

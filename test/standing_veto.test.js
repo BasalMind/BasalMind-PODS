@@ -17,6 +17,7 @@
 
 import { env } from "cloudflare:test";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { OWNER_DID, STRANGER_DID, owner, stranger, signedFetch, freshPod } from "./helpers.js";
 
 const standingMock = {
   impl: async () => ({ verdict: "active", restricted_scopes: [], source: "mocked" }),
@@ -33,34 +34,21 @@ vi.mock("../src/registry_authority_status.js", async (importOriginal) => {
   };
 });
 
-const OWNER = "did:webvh:owner-scid:example.com:persons:alice";
-const STRANGER = "did:webvh:stranger-scid:example.com:persons:bob";
+const OWNER = OWNER_DID;
+const STRANGER = STRANGER_DID;
+const SIGNERS = { [OWNER]: await owner(), [STRANGER]: await stranger() };
 
 beforeEach(() => {
   standingMock.impl = async () => ({ verdict: "active", restricted_scopes: [], source: "mocked" });
   standingMock.callCount = 0;
 });
 
-async function freshPod(name) {
-  const id = env.POD_ROOT.idFromName(name);
-  const stub = env.POD_ROOT.get(id);
-  await stub.fetch("http://pod/setup", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ owner_did: OWNER }),
-  });
-  return stub;
-}
-
 function getFacets(stub, principalDid) {
-  const headers = principalDid ? { "X-Principal-Did": principalDid } : {};
-  return stub.fetch("http://pod/facets", { headers });
+  return signedFetch(stub, principalDid ? SIGNERS[principalDid] : undefined, "/facets");
 }
 
 function putGrant(stub, editorDid, grant) {
-  const headers = { "content-type": "application/json" };
-  if (editorDid) headers["X-Principal-Did"] = editorDid;
-  return stub.fetch("http://pod/policy/grants", { method: "POST", headers, body: JSON.stringify(grant) });
+  return signedFetch(stub, editorDid ? SIGNERS[editorDid] : undefined, "/policy/grants", { method: "POST", body: grant });
 }
 
 async function allowStrangerToReadFacets(stub) {
