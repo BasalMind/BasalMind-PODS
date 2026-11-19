@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "schema:build": "node schema/build.mjs",
+    "schema:check": "node schema/build.mjs --check"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",

@@ -20,12 +20,16 @@ export default defineConfig({
     projects: [
       {
         plugins: [cloudflareTest({ wrangler: { configPath: "./wrangler.jsonc" }, miniflare: { bindings: { ...common, OWNER_DID } } })],
-        test: { name: "pod", include: ["test/**/*.test.js"], exclude: ["test/no-owner/**"] },
+        test: { name: "pod", include: ["test/**/*.test.js"], exclude: ["test/no-owner/**", "test/schema/**"] },
       },
       {
         // A second binding set with NO OWNER_DID: proves the fail-closed path.
         plugins: [cloudflareTest({ wrangler: { configPath: "./wrangler.jsonc" }, miniflare: { bindings: { ...common } } })],
         test: { name: "no-owner", include: ["test/no-owner/**/*.test.js"] },
+      },
+      {
+        // Pure-JS schema package: plain Node (needs fs/child_process), no Worker runtime.
+        test: { name: "schema", include: ["test/schema/**/*.test.js"], environment: "node" },
       },
     ],
   },
