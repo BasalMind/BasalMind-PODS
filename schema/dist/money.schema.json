@@ -1,0 +1,2516 @@
+{
+  "facet": "money",
+  "version": 1,
+  "status": "stable",
+  "data": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "settings": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "provenance": {
+              "type": "string",
+              "enum": [
+                "told",
+                "learned_say",
+                "learned_import",
+                "learned_link"
+              ]
+            },
+            "hands_on": {
+              "type": "string",
+              "enum": [
+                "warn_me",
+                "some_help",
+                "walk_me"
+              ]
+            },
+            "payday_rhythm": {
+              "type": "string",
+              "enum": [
+                "weekly",
+                "every_2_weeks",
+                "twice_a_month",
+                "monthly",
+                "irregular"
+              ]
+            },
+            "warn_days": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "const": 1
+                },
+                {
+                  "type": "number",
+                  "const": 3
+                },
+                {
+                  "type": "number",
+                  "const": 7
+                }
+              ]
+            },
+            "talk_detail": {
+              "type": "string",
+              "enum": [
+                "brief",
+                "normal",
+                "detailed"
+              ]
+            },
+            "hide_amounts": {
+              "default": false,
+              "type": "boolean"
+            },
+            "email_reminders": {
+              "default": false,
+              "type": "boolean"
+            },
+            "muted_card_types": {
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            },
+            "id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            }
+          },
+          "required": [
+            "provenance",
+            "hide_amounts",
+            "email_reminders",
+            "muted_card_types",
+            "id",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "lines": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "provenance": {
+              "type": "string",
+              "enum": [
+                "told",
+                "learned_say",
+                "learned_import",
+                "learned_link"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "spend",
+                "income"
+              ]
+            },
+            "line_key": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_.]{1,40}$"
+            },
+            "custom_label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40,
+              "pattern": "^(?![\\s\\S]*[0-9]{5,})"
+            },
+            "amount_cents": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000000
+            },
+            "amount_exact": {
+              "default": true,
+              "type": "boolean"
+            },
+            "period": {
+              "default": "month",
+              "type": "string",
+              "enum": [
+                "week",
+                "every_2_weeks",
+                "twice_a_month",
+                "month"
+              ]
+            },
+            "link_key": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_.]{1,40}$"
+            },
+            "active": {
+              "default": true,
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            }
+          },
+          "required": [
+            "provenance",
+            "kind",
+            "line_key",
+            "amount_exact",
+            "period",
+            "active",
+            "id",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "bills": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "provenance": {
+              "type": "string",
+              "enum": [
+                "told",
+                "learned_say",
+                "learned_import",
+                "learned_link"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "bill",
+                "subscription",
+                "renewal"
+              ]
+            },
+            "type_key": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_.]{1,40}$"
+            },
+            "custom_label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40,
+              "pattern": "^(?![\\s\\S]*[0-9]{5,})"
+            },
+            "amount_cents": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000000
+            },
+            "amount_exact": {
+              "default": true,
+              "type": "boolean"
+            },
+            "rule_kind": {
+              "type": "string",
+              "enum": [
+                "monthly_day",
+                "every_n_weeks",
+                "yearly",
+                "once"
+              ]
+            },
+            "rule_day": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 31
+            },
+            "rule_n": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 52
+            },
+            "rule_month": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            },
+            "rule_date": {
+              "type": "string",
+              "format": "date",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+            },
+            "next_due": {
+              "type": "string",
+              "format": "date",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+            },
+            "autopay": {
+              "default": false,
+              "type": "boolean"
+            },
+            "last_amount_cents": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000000
+            },
+            "source_txn_group": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "active": {
+              "default": true,
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            }
+          },
+          "required": [
+            "provenance",
+            "kind",
+            "type_key",
+            "amount_exact",
+            "rule_kind",
+            "autopay",
+            "active",
+            "id",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "goals": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "provenance": {
+              "type": "string",
+              "enum": [
+                "told",
+                "learned_say",
+                "learned_import",
+                "learned_link"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "saving",
+                "debt"
+              ]
+            },
+            "type_key": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_.]{1,40}$"
+            },
+            "custom_label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40,
+              "pattern": "^(?![\\s\\S]*[0-9]{5,})"
+            },
+            "target_cents": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000000
+            },
+            "by_date": {
+              "type": "string",
+              "format": "date",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+            },
+            "saved_cents": {
+              "default": 0,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000000
+            },
+            "rate_bp": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            },
+            "min_payment_cents": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000000
+            },
+            "contribution_rule": {
+              "type": "string",
+              "enum": [
+                "per_payday",
+                "per_month",
+                "when_i_can"
+              ]
+            },
+            "contribution_cents": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000000
+            },
+            "active": {
+              "default": true,
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            }
+          },
+          "required": [
+            "provenance",
+            "kind",
+            "type_key",
+            "saved_cents",
+            "active",
+            "id",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "events": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "provenance": {
+              "type": "string",
+              "enum": [
+                "told",
+                "learned_say",
+                "learned_import",
+                "learned_link"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "spent",
+                "expected",
+                "paid",
+                "contributed"
+              ]
+            },
+            "amount_cents": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000000
+            },
+            "amount_exact": {
+              "default": true,
+              "type": "boolean"
+            },
+            "on_date": {
+              "type": "string",
+              "format": "date",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+            },
+            "line_key": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_.]{1,40}$"
+            },
+            "bill_entity_id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "goal_entity_id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "dated",
+                "past"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            }
+          },
+          "required": [
+            "provenance",
+            "kind",
+            "amount_exact",
+            "on_date",
+            "scope",
+            "id",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "imports": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "provenance": {
+              "type": "string",
+              "enum": [
+                "learned_import",
+                "learned_link"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "ofx",
+                "qfx",
+                "csv",
+                "plaid"
+              ]
+            },
+            "file_hash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "row_count": {
+              "default": 0,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "date_from": {
+              "type": "string",
+              "format": "date",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+            },
+            "date_to": {
+              "type": "string",
+              "format": "date",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+            },
+            "account_label": {
+              "type": "string",
+              "pattern": "^ending [0-9]{4}$"
+            },
+            "shared_account": {
+              "default": false,
+              "type": "boolean"
+            },
+            "status": {
+              "default": "done",
+              "type": "string",
+              "enum": [
+                "parsing",
+                "done",
+                "failed",
+                "removed"
+              ]
+            },
+            "link_entity_id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            }
+          },
+          "required": [
+            "provenance",
+            "source",
+            "row_count",
+            "shared_account",
+            "status",
+            "id",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "txn": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "provenance": {
+              "type": "string",
+              "enum": [
+                "learned_import",
+                "learned_link"
+              ]
+            },
+            "import_id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "dedupe_key": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "posted_on": {
+              "type": "string",
+              "format": "date",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+            },
+            "amount_cents": {
+              "type": "integer",
+              "minimum": -100000000,
+              "maximum": 100000000
+            },
+            "merchant_norm": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^(?![\\s\\S]*[0-9]{3,})"
+            },
+            "category_key": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_.]{1,40}$"
+            },
+            "category_provenance": {
+              "type": "string",
+              "enum": [
+                "dictionary",
+                "model",
+                "told",
+                "plaid"
+              ]
+            },
+            "recurring_group": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "matched_bill_entity_id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            }
+          },
+          "required": [
+            "provenance",
+            "import_id",
+            "dedupe_key",
+            "posted_on",
+            "amount_cents",
+            "merchant_norm",
+            "id",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "links": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "provenance": {
+              "default": "learned_link",
+              "type": "string",
+              "const": "learned_link"
+            },
+            "institution_name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "linking",
+                "active",
+                "needs_attention",
+                "removing",
+                "removed",
+                "remove_pending"
+              ]
+            },
+            "last_sync_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            },
+            "linked_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            },
+            "removed_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            },
+            "id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            }
+          },
+          "required": [
+            "provenance",
+            "status",
+            "id",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "settings",
+      "lines",
+      "bills",
+      "goals",
+      "events",
+      "imports",
+      "txn",
+      "links"
+    ],
+    "additionalProperties": false
+  },
+  "op": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "anyOf": [
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "add"
+          },
+          "list": {
+            "type": "string",
+            "const": "settings"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "told",
+                  "learned_say",
+                  "learned_import",
+                  "learned_link"
+                ]
+              },
+              "hands_on": {
+                "type": "string",
+                "enum": [
+                  "warn_me",
+                  "some_help",
+                  "walk_me"
+                ]
+              },
+              "payday_rhythm": {
+                "type": "string",
+                "enum": [
+                  "weekly",
+                  "every_2_weeks",
+                  "twice_a_month",
+                  "monthly",
+                  "irregular"
+                ]
+              },
+              "warn_days": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 1
+                  },
+                  {
+                    "type": "number",
+                    "const": 3
+                  },
+                  {
+                    "type": "number",
+                    "const": 7
+                  }
+                ]
+              },
+              "talk_detail": {
+                "type": "string",
+                "enum": [
+                  "brief",
+                  "normal",
+                  "detailed"
+                ]
+              },
+              "hide_amounts": {
+                "default": false,
+                "type": "boolean"
+              },
+              "email_reminders": {
+                "default": false,
+                "type": "boolean"
+              },
+              "muted_card_types": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                }
+              }
+            },
+            "required": [
+              "provenance",
+              "hide_amounts",
+              "email_reminders",
+              "muted_card_types"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "set"
+          },
+          "list": {
+            "type": "string",
+            "const": "settings"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "told",
+                  "learned_say",
+                  "learned_import",
+                  "learned_link"
+                ]
+              },
+              "hands_on": {
+                "type": "string",
+                "enum": [
+                  "warn_me",
+                  "some_help",
+                  "walk_me"
+                ]
+              },
+              "payday_rhythm": {
+                "type": "string",
+                "enum": [
+                  "weekly",
+                  "every_2_weeks",
+                  "twice_a_month",
+                  "monthly",
+                  "irregular"
+                ]
+              },
+              "warn_days": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 1
+                  },
+                  {
+                    "type": "number",
+                    "const": 3
+                  },
+                  {
+                    "type": "number",
+                    "const": 7
+                  }
+                ]
+              },
+              "talk_detail": {
+                "type": "string",
+                "enum": [
+                  "brief",
+                  "normal",
+                  "detailed"
+                ]
+              },
+              "hide_amounts": {
+                "default": false,
+                "type": "boolean"
+              },
+              "email_reminders": {
+                "default": false,
+                "type": "boolean"
+              },
+              "muted_card_types": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                }
+              }
+            },
+            "required": [
+              "provenance",
+              "hide_amounts",
+              "email_reminders",
+              "muted_card_types"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "remove"
+          },
+          "list": {
+            "type": "string",
+            "const": "settings"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "add"
+          },
+          "list": {
+            "type": "string",
+            "const": "lines"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "told",
+                  "learned_say",
+                  "learned_import",
+                  "learned_link"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "spend",
+                  "income"
+                ]
+              },
+              "line_key": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.]{1,40}$"
+              },
+              "custom_label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40,
+                "pattern": "^(?![\\s\\S]*[0-9]{5,})"
+              },
+              "amount_cents": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000000
+              },
+              "amount_exact": {
+                "default": true,
+                "type": "boolean"
+              },
+              "period": {
+                "default": "month",
+                "type": "string",
+                "enum": [
+                  "week",
+                  "every_2_weeks",
+                  "twice_a_month",
+                  "month"
+                ]
+              },
+              "link_key": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.]{1,40}$"
+              },
+              "active": {
+                "default": true,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "provenance",
+              "kind",
+              "line_key",
+              "amount_exact",
+              "period",
+              "active"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "set"
+          },
+          "list": {
+            "type": "string",
+            "const": "lines"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "told",
+                  "learned_say",
+                  "learned_import",
+                  "learned_link"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "spend",
+                  "income"
+                ]
+              },
+              "line_key": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.]{1,40}$"
+              },
+              "custom_label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40,
+                "pattern": "^(?![\\s\\S]*[0-9]{5,})"
+              },
+              "amount_cents": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000000
+              },
+              "amount_exact": {
+                "default": true,
+                "type": "boolean"
+              },
+              "period": {
+                "default": "month",
+                "type": "string",
+                "enum": [
+                  "week",
+                  "every_2_weeks",
+                  "twice_a_month",
+                  "month"
+                ]
+              },
+              "link_key": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.]{1,40}$"
+              },
+              "active": {
+                "default": true,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "provenance",
+              "kind",
+              "line_key",
+              "amount_exact",
+              "period",
+              "active"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "remove"
+          },
+          "list": {
+            "type": "string",
+            "const": "lines"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "add"
+          },
+          "list": {
+            "type": "string",
+            "const": "bills"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "told",
+                  "learned_say",
+                  "learned_import",
+                  "learned_link"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "bill",
+                  "subscription",
+                  "renewal"
+                ]
+              },
+              "type_key": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.]{1,40}$"
+              },
+              "custom_label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40,
+                "pattern": "^(?![\\s\\S]*[0-9]{5,})"
+              },
+              "amount_cents": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000000
+              },
+              "amount_exact": {
+                "default": true,
+                "type": "boolean"
+              },
+              "rule_kind": {
+                "type": "string",
+                "enum": [
+                  "monthly_day",
+                  "every_n_weeks",
+                  "yearly",
+                  "once"
+                ]
+              },
+              "rule_day": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 31
+              },
+              "rule_n": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 52
+              },
+              "rule_month": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 12
+              },
+              "rule_date": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              },
+              "next_due": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              },
+              "autopay": {
+                "default": false,
+                "type": "boolean"
+              },
+              "last_amount_cents": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000000
+              },
+              "source_txn_group": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "active": {
+                "default": true,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "provenance",
+              "kind",
+              "type_key",
+              "amount_exact",
+              "rule_kind",
+              "autopay",
+              "active"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "set"
+          },
+          "list": {
+            "type": "string",
+            "const": "bills"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "told",
+                  "learned_say",
+                  "learned_import",
+                  "learned_link"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "bill",
+                  "subscription",
+                  "renewal"
+                ]
+              },
+              "type_key": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.]{1,40}$"
+              },
+              "custom_label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40,
+                "pattern": "^(?![\\s\\S]*[0-9]{5,})"
+              },
+              "amount_cents": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000000
+              },
+              "amount_exact": {
+                "default": true,
+                "type": "boolean"
+              },
+              "rule_kind": {
+                "type": "string",
+                "enum": [
+                  "monthly_day",
+                  "every_n_weeks",
+                  "yearly",
+                  "once"
+                ]
+              },
+              "rule_day": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 31
+              },
+              "rule_n": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 52
+              },
+              "rule_month": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 12
+              },
+              "rule_date": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              },
+              "next_due": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              },
+              "autopay": {
+                "default": false,
+                "type": "boolean"
+              },
+              "last_amount_cents": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000000
+              },
+              "source_txn_group": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "active": {
+                "default": true,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "provenance",
+              "kind",
+              "type_key",
+              "amount_exact",
+              "rule_kind",
+              "autopay",
+              "active"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "remove"
+          },
+          "list": {
+            "type": "string",
+            "const": "bills"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "add"
+          },
+          "list": {
+            "type": "string",
+            "const": "goals"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "told",
+                  "learned_say",
+                  "learned_import",
+                  "learned_link"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "saving",
+                  "debt"
+                ]
+              },
+              "type_key": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.]{1,40}$"
+              },
+              "custom_label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40,
+                "pattern": "^(?![\\s\\S]*[0-9]{5,})"
+              },
+              "target_cents": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000000
+              },
+              "by_date": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              },
+              "saved_cents": {
+                "default": 0,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000000
+              },
+              "rate_bp": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "min_payment_cents": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000000
+              },
+              "contribution_rule": {
+                "type": "string",
+                "enum": [
+                  "per_payday",
+                  "per_month",
+                  "when_i_can"
+                ]
+              },
+              "contribution_cents": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000000
+              },
+              "active": {
+                "default": true,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "provenance",
+              "kind",
+              "type_key",
+              "saved_cents",
+              "active"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "set"
+          },
+          "list": {
+            "type": "string",
+            "const": "goals"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "told",
+                  "learned_say",
+                  "learned_import",
+                  "learned_link"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "saving",
+                  "debt"
+                ]
+              },
+              "type_key": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.]{1,40}$"
+              },
+              "custom_label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40,
+                "pattern": "^(?![\\s\\S]*[0-9]{5,})"
+              },
+              "target_cents": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000000
+              },
+              "by_date": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              },
+              "saved_cents": {
+                "default": 0,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100000000
+              },
+              "rate_bp": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "min_payment_cents": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000000
+              },
+              "contribution_rule": {
+                "type": "string",
+                "enum": [
+                  "per_payday",
+                  "per_month",
+                  "when_i_can"
+                ]
+              },
+              "contribution_cents": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000000
+              },
+              "active": {
+                "default": true,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "provenance",
+              "kind",
+              "type_key",
+              "saved_cents",
+              "active"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "remove"
+          },
+          "list": {
+            "type": "string",
+            "const": "goals"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "add"
+          },
+          "list": {
+            "type": "string",
+            "const": "events"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "told",
+                  "learned_say",
+                  "learned_import",
+                  "learned_link"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "spent",
+                  "expected",
+                  "paid",
+                  "contributed"
+                ]
+              },
+              "amount_cents": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000000
+              },
+              "amount_exact": {
+                "default": true,
+                "type": "boolean"
+              },
+              "on_date": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              },
+              "line_key": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.]{1,40}$"
+              },
+              "bill_entity_id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "goal_entity_id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "dated",
+                  "past"
+                ]
+              }
+            },
+            "required": [
+              "provenance",
+              "kind",
+              "amount_exact",
+              "on_date",
+              "scope"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "set"
+          },
+          "list": {
+            "type": "string",
+            "const": "events"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "told",
+                  "learned_say",
+                  "learned_import",
+                  "learned_link"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "spent",
+                  "expected",
+                  "paid",
+                  "contributed"
+                ]
+              },
+              "amount_cents": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000000
+              },
+              "amount_exact": {
+                "default": true,
+                "type": "boolean"
+              },
+              "on_date": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              },
+              "line_key": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.]{1,40}$"
+              },
+              "bill_entity_id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "goal_entity_id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "dated",
+                  "past"
+                ]
+              }
+            },
+            "required": [
+              "provenance",
+              "kind",
+              "amount_exact",
+              "on_date",
+              "scope"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "remove"
+          },
+          "list": {
+            "type": "string",
+            "const": "events"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "add"
+          },
+          "list": {
+            "type": "string",
+            "const": "imports"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "learned_import",
+                  "learned_link"
+                ]
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "ofx",
+                  "qfx",
+                  "csv",
+                  "plaid"
+                ]
+              },
+              "file_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "row_count": {
+                "default": 0,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "date_from": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              },
+              "date_to": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              },
+              "account_label": {
+                "type": "string",
+                "pattern": "^ending [0-9]{4}$"
+              },
+              "shared_account": {
+                "default": false,
+                "type": "boolean"
+              },
+              "status": {
+                "default": "done",
+                "type": "string",
+                "enum": [
+                  "parsing",
+                  "done",
+                  "failed",
+                  "removed"
+                ]
+              },
+              "link_entity_id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              }
+            },
+            "required": [
+              "provenance",
+              "source",
+              "row_count",
+              "shared_account",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "set"
+          },
+          "list": {
+            "type": "string",
+            "const": "imports"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "learned_import",
+                  "learned_link"
+                ]
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "ofx",
+                  "qfx",
+                  "csv",
+                  "plaid"
+                ]
+              },
+              "file_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "row_count": {
+                "default": 0,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "date_from": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              },
+              "date_to": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              },
+              "account_label": {
+                "type": "string",
+                "pattern": "^ending [0-9]{4}$"
+              },
+              "shared_account": {
+                "default": false,
+                "type": "boolean"
+              },
+              "status": {
+                "default": "done",
+                "type": "string",
+                "enum": [
+                  "parsing",
+                  "done",
+                  "failed",
+                  "removed"
+                ]
+              },
+              "link_entity_id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              }
+            },
+            "required": [
+              "provenance",
+              "source",
+              "row_count",
+              "shared_account",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "remove"
+          },
+          "list": {
+            "type": "string",
+            "const": "imports"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "add"
+          },
+          "list": {
+            "type": "string",
+            "const": "txn"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "learned_import",
+                  "learned_link"
+                ]
+              },
+              "import_id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "dedupe_key": {
+                "type": "string",
+                "minLength": 8,
+                "maxLength": 128
+              },
+              "posted_on": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              },
+              "amount_cents": {
+                "type": "integer",
+                "minimum": -100000000,
+                "maximum": 100000000
+              },
+              "merchant_norm": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^(?![\\s\\S]*[0-9]{3,})"
+              },
+              "category_key": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.]{1,40}$"
+              },
+              "category_provenance": {
+                "type": "string",
+                "enum": [
+                  "dictionary",
+                  "model",
+                  "told",
+                  "plaid"
+                ]
+              },
+              "recurring_group": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "matched_bill_entity_id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              }
+            },
+            "required": [
+              "provenance",
+              "import_id",
+              "dedupe_key",
+              "posted_on",
+              "amount_cents",
+              "merchant_norm"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "set"
+          },
+          "list": {
+            "type": "string",
+            "const": "txn"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "provenance": {
+                "type": "string",
+                "enum": [
+                  "learned_import",
+                  "learned_link"
+                ]
+              },
+              "import_id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "dedupe_key": {
+                "type": "string",
+                "minLength": 8,
+                "maxLength": 128
+              },
+              "posted_on": {
+                "type": "string",
+                "format": "date",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+              },
+              "amount_cents": {
+                "type": "integer",
+                "minimum": -100000000,
+                "maximum": 100000000
+              },
+              "merchant_norm": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^(?![\\s\\S]*[0-9]{3,})"
+              },
+              "category_key": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.]{1,40}$"
+              },
+              "category_provenance": {
+                "type": "string",
+                "enum": [
+                  "dictionary",
+                  "model",
+                  "told",
+                  "plaid"
+                ]
+              },
+              "recurring_group": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "matched_bill_entity_id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              }
+            },
+            "required": [
+              "provenance",
+              "import_id",
+              "dedupe_key",
+              "posted_on",
+              "amount_cents",
+              "merchant_norm"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "remove"
+          },
+          "list": {
+            "type": "string",
+            "const": "txn"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "add"
+          },
+          "list": {
+            "type": "string",
+            "const": "links"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "provenance": {
+                "default": "learned_link",
+                "type": "string",
+                "const": "learned_link"
+              },
+              "institution_name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "linking",
+                  "active",
+                  "needs_attention",
+                  "removing",
+                  "removed",
+                  "remove_pending"
+                ]
+              },
+              "last_sync_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+              },
+              "linked_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+              },
+              "removed_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+              }
+            },
+            "required": [
+              "provenance",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "set"
+          },
+          "list": {
+            "type": "string",
+            "const": "links"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "provenance": {
+                "default": "learned_link",
+                "type": "string",
+                "const": "learned_link"
+              },
+              "institution_name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "linking",
+                  "active",
+                  "needs_attention",
+                  "removing",
+                  "removed",
+                  "remove_pending"
+                ]
+              },
+              "last_sync_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+              },
+              "linked_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+              },
+              "removed_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+              }
+            },
+            "required": [
+              "provenance",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "remove"
+          },
+          "list": {
+            "type": "string",
+            "const": "links"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "undo"
+          },
+          "receipt_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "op",
+          "receipt_id"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  }
+}

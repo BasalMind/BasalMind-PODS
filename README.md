@@ -91,3 +91,19 @@ themselves than go through the app.
 ## License
 
 Apache License 2.0 -- see `LICENSE`.
+
+## Shared schema package (`schema/`)
+
+Pure JS ESM (zod/mini), no Worker runtime needed, so the pod Worker, BasalMind's MoneySpace
+and Node tooling can all import it.
+
+- `schema/facets/health.js` (v1: allergies, medications, history, providers, insurance; no
+  member or policy ID field anywhere), `schema/facets/money.js` (v1: mirrors BasalMind money
+  M1/M2, integer cents), `schema/facets/memoir.js` (v0 placeholder, not deployable).
+- `schema/postmessage.js` -- the content-free panel messages; `schema/tokens.json` -- shared
+  panel design tokens, each with its source file and line.
+- `npm run schema:build` writes `schema/dist/` (JSON Schema + SQLite migration per facet, and
+  `manifest.json` with a CIDv1 `spec_cid`); `npm run schema:check` fails if `dist/` is stale.
+- **Signing:** `schema/sign.mjs` can sign and verify a manifest with ed25519 over its canonical
+  JSON. There is **no release key yet**: `dist/manifest.json` ships with `signature: null`.
+  Two-person KMS signing of releases is a later stage; tests sign only with a throwaway key.

@@ -1,0 +1,34 @@
+{
+  "spec_version": 1,
+  "facets": [
+    {
+      "name": "health",
+      "version": 1,
+      "status": "stable",
+      "deployable": true,
+      "json_schema_file": "health.schema.json",
+      "sqlite_file": "health.sqlite.sql",
+      "sha256": "26dfe41c1024d6e944a49d6b58a42340cd757ac8d05abfba7d88574bba729bf3"
+    },
+    {
+      "name": "money",
+      "version": 1,
+      "status": "stable",
+      "deployable": false,
+      "json_schema_file": "money.schema.json",
+      "sqlite_file": "money.sqlite.sql",
+      "sha256": "7ba61646505de219ce2d5f5e577a8948ec3e7fd5c145bbf3d2d694240d6deaf6"
+    },
+    {
+      "name": "memoir",
+      "version": 0,
+      "status": "placeholder",
+      "deployable": false,
+      "json_schema_file": "memoir.schema.json",
+      "sqlite_file": "memoir.sqlite.sql",
+      "sha256": "bbe52ead4aad528e927c57dbdd9419f4f21cea8cc81f15b2b858548a7bd5b451"
+    }
+  ],
+  "spec_cid": "bafkreihpgcctsngkkmnhm7fi2n7za6a23ijbt4f2tx2smrocx76wzx3x2i",
+  "signature": null
+}

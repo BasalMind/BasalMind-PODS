@@ -1,0 +1,905 @@
+{
+  "facet": "health",
+  "version": 1,
+  "status": "stable",
+  "data": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "allergies": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "substance": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "reaction": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "severity": {
+              "type": "string",
+              "enum": [
+                "Mild",
+                "Moderate",
+                "Severe"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            }
+          },
+          "required": [
+            "substance",
+            "severity",
+            "id",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "medications": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "dose": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "when": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            }
+          },
+          "required": [
+            "name",
+            "id",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "history": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "what": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "when": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 60
+            },
+            "note": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            }
+          },
+          "required": [
+            "what",
+            "id",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "providers": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "enum": [
+                "doctor",
+                "dentist",
+                "pharmacy",
+                "other"
+              ]
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "contact": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "next_visit": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 60
+            },
+            "notes": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            }
+          },
+          "required": [
+            "role",
+            "name",
+            "id",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "insurance": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "plan_name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "renewal_date": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 60
+            },
+            "notes": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}(?:Z))$"
+            }
+          },
+          "required": [
+            "plan_name",
+            "id",
+            "updated_at"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "allergies",
+      "medications",
+      "history",
+      "providers",
+      "insurance"
+    ],
+    "additionalProperties": false
+  },
+  "op": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "anyOf": [
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "add"
+          },
+          "list": {
+            "type": "string",
+            "const": "allergies"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "substance": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "reaction": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "Mild",
+                  "Moderate",
+                  "Severe"
+                ]
+              }
+            },
+            "required": [
+              "substance",
+              "severity"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "set"
+          },
+          "list": {
+            "type": "string",
+            "const": "allergies"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "substance": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "reaction": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "Mild",
+                  "Moderate",
+                  "Severe"
+                ]
+              }
+            },
+            "required": [
+              "substance",
+              "severity"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "remove"
+          },
+          "list": {
+            "type": "string",
+            "const": "allergies"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "add"
+          },
+          "list": {
+            "type": "string",
+            "const": "medications"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "dose": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "when": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "set"
+          },
+          "list": {
+            "type": "string",
+            "const": "medications"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "dose": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "when": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "remove"
+          },
+          "list": {
+            "type": "string",
+            "const": "medications"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "add"
+          },
+          "list": {
+            "type": "string",
+            "const": "history"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "what": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "when": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60
+              },
+              "note": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "what"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "set"
+          },
+          "list": {
+            "type": "string",
+            "const": "history"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "what": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "when": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60
+              },
+              "note": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "what"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "remove"
+          },
+          "list": {
+            "type": "string",
+            "const": "history"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "add"
+          },
+          "list": {
+            "type": "string",
+            "const": "providers"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "role": {
+                "type": "string",
+                "enum": [
+                  "doctor",
+                  "dentist",
+                  "pharmacy",
+                  "other"
+                ]
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "contact": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "next_visit": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60
+              },
+              "notes": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "role",
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "set"
+          },
+          "list": {
+            "type": "string",
+            "const": "providers"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "role": {
+                "type": "string",
+                "enum": [
+                  "doctor",
+                  "dentist",
+                  "pharmacy",
+                  "other"
+                ]
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "contact": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "next_visit": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60
+              },
+              "notes": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "role",
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "remove"
+          },
+          "list": {
+            "type": "string",
+            "const": "providers"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "add"
+          },
+          "list": {
+            "type": "string",
+            "const": "insurance"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "plan_name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "renewal_date": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60
+              },
+              "notes": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "plan_name"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "set"
+          },
+          "list": {
+            "type": "string",
+            "const": "insurance"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "value": {
+            "type": "object",
+            "properties": {
+              "plan_name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "renewal_date": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60
+              },
+              "notes": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "plan_name"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "remove"
+          },
+          "list": {
+            "type": "string",
+            "const": "insurance"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "op",
+          "list",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "undo"
+          },
+          "receipt_id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "op",
+          "receipt_id"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  }
+}
