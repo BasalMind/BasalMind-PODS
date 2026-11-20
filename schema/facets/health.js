@@ -45,6 +45,7 @@ export const facet = {
   name: "health",
   version: 1,
   status: "stable",
+  category: "hipaa_adjacent",
   deployable: true,
   lists: {
     allergies: Allergy,

@@ -1,0 +1,10 @@
+{
+  "$comment": "Generated home of each data category a facet declares, copied from BasalMind core basaltribe.data_storage_policies (age_tier_scope 'all' rows; migrations 880-881). Refresh by hand from the live table when a category's home changes; test/schema/homes.test.js pins the refusal rule. The pod refuses (build and runtime) any facet whose category home is not customer_pod.",
+  "source": "basaltribe.data_storage_policies age_tier_scope=all, read 2026-11-20 on buses 4222 and 4223 (identical)",
+  "homes": {
+    "hipaa_adjacent": "customer_pod",
+    "memoir_private": "customer_pod",
+    "money_self_reported": "postgres",
+    "pii_high": "customer_pod"
+  }
+}

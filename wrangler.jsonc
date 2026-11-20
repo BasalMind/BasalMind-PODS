@@ -6,11 +6,13 @@
   "durable_objects": {
     "bindings": [
       { "name": "POD_ROOT", "class_name": "PodRoot" },
-      { "name": "INVENTORY_FACET", "class_name": "InventoryFacet" }
+      { "name": "FACET_STORE", "class_name": "FacetStore" }
     ]
   },
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["PodRoot"] },
-    { "tag": "v2", "new_sqlite_classes": ["InventoryFacet"] }
+    { "tag": "v2", "new_sqlite_classes": ["InventoryFacet"] },
+    { "tag": "v3", "new_sqlite_classes": ["FacetStore"] }
   ]
 }

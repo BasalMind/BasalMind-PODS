@@ -107,3 +107,28 @@ and Node tooling can all import it.
 - **Signing:** `schema/sign.mjs` can sign and verify a manifest with ed25519 over its canonical
   JSON. There is **no release key yet**: `dist/manifest.json` ships with `signature: null`.
   Two-person KMS signing of releases is a later stage; tests sign only with a throwaway key.
+
+## Panel pods (path C, pod-kernel-2)
+
+A pod deployed WITHOUT an `OWNER_DID` binding is a panel pod. It serves its own UI and
+BasalMind's servers never call it except `GET /status`:
+
+- `src/panel_auth.js`: one-time setup/recovery grant (who may register the first passkey),
+  pod-origin passkeys (rpId = the pod's own host), purpose-bound single-use challenges,
+  12 h sessions (only a hash is stored; the token lives in the panel's memory), and a
+  content-free, hash-chained access log. Never shares code with the signed-request kernel.
+- `src/webauthn.js`: WebAuthn registration/assertion verification (ES256, attestation none).
+- `src/facet_store.js`: the generic facet framework built from `schema/dist/bundle.js`;
+  only facets whose data category's generated home is `customer_pod` exist (today: `health`).
+  Writes are receipts; Undo is a superseding op; undo copies are purged after 24 h.
+- `panel/`: the panel (iframe in BasalMind's modal) and setup pages (top-level), served
+  from the release bytes (`npm run assets:build` -> `src/panel_assets.generated.js`).
+- `schema/postmessage.js` + `schema/host.js`: the content-free message contract, and the
+  helper BasalMind's page uses (origin + source checks, pinned target origin).
+- `release/release.mjs`: release manifest over code, assets, bindings, migrations and homes,
+  signed by two distinct pinned keys (`release/keys.json` is empty until the real keys exist,
+  so verification fails closed).
+
+Contract: `docs/panel-api.md`. Browser proof: `test/e2e/` (local `wrangler dev` + Playwright).
+A pod WITH `OWNER_DID` is a legacy (path A) pod; panel routes do not exist on it and signed
+routes do not exist on a panel pod.

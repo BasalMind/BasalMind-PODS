@@ -5,7 +5,10 @@
   "scripts": {
     "test": "vitest run",
     "schema:build": "node schema/build.mjs",
-    "schema:check": "node schema/build.mjs --check"
+    "schema:check": "node schema/build.mjs --check",
+    "assets:build": "node scripts/build-assets.mjs",
+    "assets:check": "node scripts/build-assets.mjs --check",
+    "release": "node release/release.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",

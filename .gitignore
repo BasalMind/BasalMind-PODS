@@ -1,3 +1,4 @@
 node_modules/
 .wrangler/
 *.log
+test/e2e/host.bundle.js

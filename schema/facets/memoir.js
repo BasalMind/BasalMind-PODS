@@ -13,6 +13,7 @@ export const facet = {
   name: "memoir",
   version: 0,
   status: "placeholder",
+  category: "memoir_private",
   deployable: false,
   lists: { chapters: Chapter },
 };

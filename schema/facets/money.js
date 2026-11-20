@@ -158,6 +158,7 @@ export const facet = {
   status: "stable",
   // Not deployable to a customer pod yet: money lives in Postgres -> MoneySpace (money-space-2 builds to this schema);
   // a pod money facet is money-pod-3, after money is live in prod (customer-pods-1 PLAN).
+  category: "money_self_reported",
   deployable: false,
   lists: { settings: Settings, lines: Line, bills: Bill, goals: Goal, events: Event, imports: Import, txn: Txn, links: Link },
 };

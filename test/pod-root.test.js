@@ -1,4 +1,4 @@
-import { env, evictDurableObject } from "cloudflare:test";
+import { env, evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { describe, it, expect } from "vitest";
 import { OWNER_DID, owner, signedFetch, freshPod, podRootStub, rejection } from "./helpers.js";
 
@@ -6,17 +6,19 @@ describe("pod-root facet -- first-boot initialization", () => {
   it("first boot creates pod_meta and facet_directory from the OWNER_DID binding, with no setup call", { timeout: 20000 }, async () => {
     const stub = await freshPod("boot-creates-meta");
     const status = await (await stub.fetch("http://pod/status")).json();
-    expect(status.pod.protocol_version).toBe("poc-v0");
-    const podId = status.pod.pod_id;
+    expect(status.setup_complete).toBe(true);
+    const meta = () => runInDurableObject(stub, (inst) => [...inst.sql("SELECT pod_id, protocol_version FROM pod_meta")][0]);
+    const first = await meta();
+    expect(first.protocol_version).toBe("poc-v0");
 
-    // The owner (authenticated by signature) sees the registered facet.
+    // The owner (authenticated by signature) sees the facet directory (empty:
+    // the retired inventory facet is no longer registered, pod-kernel-2).
     const facets = await (await signedFetch(stub, await owner(), "/facets")).json();
-    expect(facets.facets.map((f) => f.facet_id)).toContain("inventory");
+    expect(facets.facets).toEqual([]);
 
     // Eviction re-runs the constructor: first boot must not mint a second pod_id.
     await evictDurableObject(stub);
-    const again = await (await stub.fetch("http://pod/status")).json();
-    expect(again.pod.pod_id).toBe(podId);
+    expect((await meta()).pod_id).toBe(first.pod_id);
   });
 
   it("a second init attempt is rejected -- ownership can never be re-rooted", async () => {
@@ -45,9 +47,10 @@ describe("pod-root facet -- first-boot initialization", () => {
   it("status reflects an empty facet directory before any real facet is registered as listed", async () => {
     const stub = await freshPod("status-check");
     const status = await (await stub.fetch("http://pod/status")).json();
-    expect(status.ok).toBe(true);
-    expect(status.facets).toEqual([]);
-    expect(status.scope).toMatch(/proof-of-concept/);
+    // Minimal, person-free shape (FABLE-REVIEW-P2 s7): what core reads + setup_complete.
+    expect(Object.keys(status).sort()).toEqual(["attestation", "did_log_published", "release", "service_key", "setup_complete", "spec_cid"]);
+    expect(status.release).toBe("dev");
+    expect(status.spec_cid).toMatch(/^bafkrei[a-z2-7]+$/);
   });
 
   it("an unknown path 404s", async () => {
@@ -59,7 +62,7 @@ describe("pod-root facet -- first-boot initialization", () => {
   it("/status does not disclose owner_did or private facets, and exposes only the PUBLIC service key", async () => {
     const stub = await freshPod("status-no-disclosure");
     const status = await (await stub.fetch("http://pod/status")).json();
-    expect(status.pod.owner_did).toBeUndefined();
+    expect(status.owner_did).toBeUndefined();
     expect(JSON.stringify(status)).not.toContain(OWNER_DID);
     expect(status.service_key).toMatch(/^z6Mk/);
     expect(JSON.stringify(status)).not.toMatch(/pkcs8|private/i);

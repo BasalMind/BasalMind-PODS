@@ -29,5 +29,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Generated files are current
+        run: |
+          npm run schema:check
+          npm run assets:check
+
       - name: Run tests
         run: npm test

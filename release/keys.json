@@ -1,0 +1,4 @@
+{
+  "$comment": "Pinned release public keys (ed25519, hex) by key id. EMPTY on purpose: no production release key exists yet, so every release verification fails closed. Two keys held by two different people are added here (by PR) once they are created in GCP KMS. Test keys live only under test/.",
+  "keys": {}
+}

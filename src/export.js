@@ -21,7 +21,8 @@
 import { sha256Hex } from "./encoding.js";
 
 export const EXPORT_FORMAT = "basalmind-pod-export-v1";
-const EXCLUDED_TABLES = new Set(["request_nonces"]);
+// Never exported: replay caches, panel sessions, single-use challenges and grants.
+const EXCLUDED_TABLES = new Set(["request_nonces", "panel_sessions", "used_challenges", "consumed_grants", "grant_failures"]);
 
 // Returns { tableName: row[] } for every user table in this DO's SQLite.
 export function dumpTables(sql) {
