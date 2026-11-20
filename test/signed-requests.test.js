@@ -260,17 +260,4 @@ describe("policy edits are root-only", () => {
     expect(res.status).toBe(403);
   });
 
-  it("the facet DO's policy route is root-only too", async () => {
-    await freshPod("pod-root");
-    const facet = env.INVENTORY_FACET.get(env.INVENTORY_FACET.idFromName("root-only-facet"));
-    await facet.setup(OWNER_DID);
-    const body = { grant_id: "inv-self", principal_did: STRANGER_DID, action: "policy.write", resource: "policy_grants", effect: "allow", expires_at: null };
-    expect((await signedFetch(facet, await owner(), "/inventory/policy/grants", { method: "POST", body })).status).toBe(200);
-    // Now the stranger holds an explicit policy.write grant on the facet...
-    const attempt = await signedFetch(facet, await stranger(), "/inventory/policy/grants", {
-      method: "POST", body: { ...body, grant_id: "inv-escalate", action: "inventory_item.read", resource: "inventory_item" },
-    });
-    // ...and is still refused: policy edits need the root key.
-    expect(attempt.status).toBe(403);
-  });
 });

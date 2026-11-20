@@ -16,50 +16,126 @@ import { ensureServiceKey } from "./service_key.js";
 import { bytesToBase64Url } from "./encoding.js";
 import { dumpTables, buildExport } from "./export.js";
 import { InventoryFacet } from "./facets/inventory/index.js";
+import { FacetStore, FacetError, isPanelFacet, UNDO_WINDOW_MS } from "./facet_store.js";
+import { createPanelAuth, setupPanelTables, PanelError, appOrigin, podOriginOf } from "./panel_auth.js";
+import { ASSETS } from "./panel_assets.generated.js";
+import { SPEC_CID } from "../schema/dist/bundle.js";
 
-// Re-exported so wrangler's durable_objects binding for INVENTORY_FACET
-// (wrangler.jsonc) can resolve the class from this file, the Worker's
-// declared `main` -- Cloudflare requires every bound DO class to be
-// reachable from the main module, same as PodRoot below.
-export { InventoryFacet };
+// InventoryFacet is retired (pod-kernel-2: the generic FacetStore replaces it).
+// The class stays exported ONLY because wrangler migration tag v2 declared it:
+// migrations are append-only and a deleted_classes step would destroy storage,
+// which a release must never do (FABLE-REVIEW-P2 s5/s8). It has no binding and
+// no route, so nothing can reach it.
+export { InventoryFacet, FacetStore };
 
-// Single source of truth for "which (method, path) pairs exist," consumed
-// by two places that must never drift apart: buildApp()'s Hono
-// registration, and the top-level Worker's cheap-reject before the DO hop
-// (see the default export below). Opus architecture review, 2026-08-31:
-// the pre-existing default export forwarded EVERYTHING to the DO
-// unconditionally -- garbage paths/methods from any anonymous caller woke
-// the DO and billed the customer's account before a 404 ever fired, same
-// defect class (billing-relevant work on unauthenticated input) as the
-// receipt-table DoS a prior review already closed at a different layer.
-//
-// `binding` added 2026-09-16 alongside InventoryFacet, the first route
-// set that isn't PodRoot's own -- routes are only ever forwarded, never
-// path-rewritten (see InventoryFacet.buildApp()'s own note on why its
-// Hono routes are registered at their full "/inventory/..." paths).
-//
-// `public: true` routes need no signature (/status, the published DID log,
-// /challenge -- the last authenticates its caller by the registry
-// authority's signature on the nonce instead). Every other route must carry
-// a signed request, so the Worker also cheap-rejects a request with no
-// signature header at all before waking a DO. POST /setup is gone (S1):
-// the pod initializes itself on first boot from the OWNER_DID binding.
-const KNOWN_ROUTES = [
-  { method: "GET", path: "/status", binding: "POD_ROOT", public: true },
-  { method: "GET", path: "/.well-known/did.jsonl", binding: "POD_ROOT", public: true },
-  { method: "PUT", path: "/.well-known/did.jsonl", binding: "POD_ROOT", maxBody: 256 * 1024 },
-  { method: "GET", path: "/challenge", binding: "POD_ROOT", public: true },
-  { method: "GET", path: "/export", binding: "POD_ROOT" },
-  { method: "POST", path: "/policy/grants", binding: "POD_ROOT" },
-  { method: "GET", path: "/facets", binding: "POD_ROOT" },
-  { method: "POST", path: "/inventory/items", binding: "INVENTORY_FACET" },
-  { method: "POST", path: "/inventory/items/update", binding: "INVENTORY_FACET" },
-  { method: "GET", path: "/inventory/items", binding: "INVENTORY_FACET" },
-  { method: "POST", path: "/inventory/movements", binding: "INVENTORY_FACET" },
-  { method: "GET", path: "/inventory/balances", binding: "INVENTORY_FACET" },
-  { method: "GET", path: "/inventory/alerts/low-stock", binding: "INVENTORY_FACET" },
-  { method: "POST", path: "/inventory/policy/grants", binding: "INVENTORY_FACET" },
+// Route table: every (method, path) the Worker answers, each with an AUTH
+// CLASS (FABLE-REVIEW-P2 s4/s8). The Worker cheap-rejects before any Durable
+// Object wakes: unknown routes 404, a route of the wrong MODE 404, a missing
+// credential of the route's class 401, and a request carrying BOTH a signature
+// and a bearer token 400.
+//   static  -- served by the Worker itself from the release bytes (no DO)
+//   public  -- no credential (/status, the DID log, the registry liveness check)
+//   setup   -- top-level setup/add pages' API: grant token or assertion in the body
+//   unlock  -- panel API that produces a session (assertion in the body)
+//   session -- panel API: Authorization: Bearer <token> (panel_auth.js)
+//   signed  -- legacy signed-request routes (did:webvh owner keys)
+// MODE: a pod is either a "panel" pod (path C: no OWNER_DID binding; first
+// passkey via a one-time setup grant) or a "legacy" pod (paused path A:
+// OWNER_DID binding). Panel routes never exist on a legacy pod and signed
+// routes never exist on a panel pod, so a panel session can never act as the
+// signed-request owner and vice versa.
+const FACET_SEG = "([a-z][a-z0-9_]{1,31})";
+const ROUTES = [
+  { method: "GET", re: /^\/status$/, auth: "public", mode: "any" },
+  { method: "GET", re: /^\/\.well-known\/did\.jsonl$/, auth: "public", mode: "any" },
+  { method: "GET", re: /^\/challenge$/, auth: "public", mode: "any" },
+  { method: "PUT", re: /^\/\.well-known\/did\.jsonl$/, auth: "signed", mode: "legacy", maxBody: 256 * 1024 },
+  { method: "GET", re: /^\/export$/, auth: "signed", mode: "legacy" },
+  { method: "POST", re: /^\/policy\/grants$/, auth: "signed", mode: "legacy" },
+  { method: "GET", re: /^\/facets$/, auth: "signed", mode: "legacy" },
+  { method: "GET", re: new RegExp(`^/(panel|open)(?:/${FACET_SEG})?$`), auth: "static", mode: "panel", page: "panel" },
+  { method: "GET", re: /^\/setup(\/add)?$/, auth: "static", mode: "panel", page: "setup" },
+  { method: "GET", re: /^\/assets\/[a-z0-9_]+\.(js|css)$/, auth: "static", mode: "panel", page: "asset" },
+  { method: "POST", re: /^\/setup\/api\/(begin|finish|add\/begin|add\/assert|add\/finish)$/, auth: "setup", mode: "panel" },
+  { method: "POST", re: /^\/panel\/api\/unlock\/(begin|finish)$/, auth: "unlock", mode: "panel" },
+  { method: "POST", re: /^\/panel\/api\/(lock|summary\/ack|passkeys\/remove\/begin|passkeys\/remove)$/, auth: "session", mode: "panel" },
+  { method: "GET", re: /^\/panel\/api\/passkeys$/, auth: "session", mode: "panel" },
+  { method: "GET", re: new RegExp(`^/panel/api/facet/${FACET_SEG}$`), auth: "session", mode: "panel" },
+  { method: "POST", re: new RegExp(`^/panel/api/facet/${FACET_SEG}/(ops|undo)$`), auth: "session", mode: "panel" },
 ];
+
+export function matchRoute(method, path) {
+  for (const r of ROUTES) {
+    if (r.method !== method) continue;
+    const m = r.re.exec(path);
+    if (m) return { route: r, match: m };
+  }
+  return null;
+}
+
+export function podMode(env) {
+  return typeof env?.OWNER_DID === "string" && env.OWNER_DID !== "" ? "legacy" : "panel";
+}
+
+// Security headers (FABLE-REVIEW-P2 1.4). JSON: never cached, never readable
+// cross-origin, no CORS header anywhere.
+const BASE_HEADERS = {
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer",
+  "cross-origin-resource-policy": "same-origin",
+};
+export function jsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...BASE_HEADERS, "content-type": "application/json", "cache-control": "no-store" },
+  });
+}
+const CSP_BASE = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'";
+export function pageResponse(html, frameAncestors) {
+  const headers = {
+    ...BASE_HEADERS,
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+    "content-security-policy": `${CSP_BASE}; frame-ancestors ${frameAncestors}`,
+    "permissions-policy": "publickey-credentials-get=(self), publickey-credentials-create=(self)",
+  };
+  if (frameAncestors === "'none'") headers["x-frame-options"] = "DENY";
+  return new Response(html, { status: 200, headers });
+}
+
+const PANEL_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Your private space</title><link rel="stylesheet" href="/assets/panel.css"></head><body><main id="app"></main><script type="module" src="/assets/panel.js"></script></body></html>`;
+const SETUP_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Your private space</title><link rel="stylesheet" href="/assets/panel.css"></head><body><main id="app"></main><script type="module" src="/assets/setup.js"></script></body></html>`;
+
+function serveStatic(route, match, url, env) {
+  if (route.page === "panel") {
+    if (match[2] && !isPanelFacet(match[2])) return jsonResponse({ error: "not found" }, 404);
+    // /panel is framed by the app origin only; /open is the same code top-level.
+    return pageResponse(PANEL_HTML, match[1] === "panel" ? appOrigin(env) : "'none'");
+  }
+  if (route.page === "setup") return pageResponse(SETUP_HTML, "'none'");
+  if (url.pathname === "/assets/config.js") {
+    const body = `export const APP_ORIGIN = ${JSON.stringify(appOrigin(env))};\nexport const UNDO_WINDOW_MS = ${UNDO_WINDOW_MS};\n`;
+    return new Response(body, { headers: { ...BASE_HEADERS, "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" } });
+  }
+  const a = ASSETS[url.pathname];
+  if (!a) return jsonResponse({ error: "not found" }, 404);
+  return new Response(a.body, { headers: { ...BASE_HEADERS, "content-type": a.type, "cache-control": "no-cache" } });
+}
+
+// Browser-side CSRF belt and braces for panel/setup POSTs (no ambient
+// credential exists, so this is defence in depth): JSON only, and when the
+// browser says where the request came from it must be this pod.
+function csrfReject(request, env) {
+  if (request.method !== "POST") return null;
+  const ct = request.headers.get("content-type") || "";
+  if (!/^application\/json\b/i.test(ct)) return jsonResponse({ error: "json_required" }, 415);
+  const pod = podOriginOf(env);
+  const origin = request.headers.get("origin");
+  if (origin !== null && (!pod || origin !== pod.origin)) return jsonResponse({ error: "cross_origin" }, 403);
+  const site = request.headers.get("sec-fetch-site");
+  if (site !== null && site !== "same-origin") return jsonResponse({ error: "cross_origin" }, 403);
+  return null;
+}
 
 // Pod root: the pod's one stable, addressable entry point. Holds routing
 // metadata AND the owner-maintained authorization policy every facet DO
@@ -123,6 +199,13 @@ export class PodRoot extends DurableObject {
     this.requirePolicy = kernel.requirePolicy;
     this.protectedRoute = kernel.protectedRoute;
     this.serviceKey = null;
+    this.panel = createPanelAuth({
+      sql: (q, ...b) => this.sql(q, ...b),
+      storage: this.ctx.storage,
+      env,
+      serviceKey: () => (this.serviceKey ? this.serviceKey.publicMultikey : null),
+      transact: (fn) => this.ctx.storage.transactionSync(fn),
+    });
     this.app = this.buildApp();
     // First boot (S1): mint the service key and initialize from the
     // OWNER_DID binding BEFORE any request is served. blockConcurrencyWhile
@@ -138,6 +221,12 @@ export class PodRoot extends DurableObject {
   async firstBoot() {
     this.serviceKey = await ensureServiceKey(this.ctx.storage);
     this.createTables();
+    if (podMode(this.env) === "panel") {
+      // Path C: no owner yet; the first passkey comes only through the
+      // one-time setup grant (panel_auth.js). Note a redeploy as drift.
+      await this.panel.noteCodeVersion();
+      return;
+    }
     const existing = this.ownerDid();
     const binding = this.env.OWNER_DID;
     if (!existing && isWebvhDid(binding)) {
@@ -195,6 +284,7 @@ export class PodRoot extends DurableObject {
     setupPolicyTables((q, ...b) => this.sql(q, ...b));
     setupStatusCacheTable((q, ...b) => this.sql(q, ...b));
     setupNonceTable((q, ...b) => this.sql(q, ...b));
+    setupPanelTables((q, ...b) => this.sql(q, ...b));
   }
 
   async initialize(ownerDid) {
@@ -205,24 +295,6 @@ export class PodRoot extends DurableObject {
       ownerDid,
       new Date().toISOString(),
     );
-    await this.setupInventoryFacet(ownerDid);
-  }
-
-  // Calls InventoryFacet.setup() via Workers RPC -- a DurableObject
-  // subclass's public methods are callable directly on its own stub
-  // (env.INVENTORY_FACET.get(id)), not just fetch() -- so a facet never
-  // needs a separate onboarding step of its own; initializing the pod sets
-  // up every registered facet with it. Idempotent.
-  async setupInventoryFacet(ownerDid) {
-    const id = this.env.INVENTORY_FACET.idFromName("inventory");
-    const stub = this.env.INVENTORY_FACET.get(id);
-    await stub.setup(ownerDid);
-    this.sql(
-      `INSERT INTO facet_directory (facet_id, facet_profile, profile_version, label, service_path, visibility, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT (facet_id) DO NOTHING;`,
-      "inventory", "inventory-v0", "v0", "Inventory", "/inventory", "private", new Date().toISOString(),
-    );
   }
 
   // Bounded Fable review, 2026-08-31, finding 1: /status is deliberately
@@ -231,21 +303,26 @@ export class PodRoot extends DurableObject {
   // PUBLIC multikey (never anything private) so the phone can build the
   // genesis DID log around it (design s4.4).
   async status() {
-    let meta, facets;
+    // Minimal and person-free (FABLE-REVIEW-P2 s7): exactly what BasalMind core
+    // reads (pod_port._parse_status) plus setup_complete. `release` and
+    // `attestation` are bindings the uploader sets from the SIGNED release
+    // manifest; the attestation is a drift signal only, never a gate.
+    const out = {
+      release: typeof this.env.RELEASE_ID === "string" ? this.env.RELEASE_ID : "dev",
+      spec_cid: SPEC_CID,
+      attestation: typeof this.env.RELEASE_ATTESTATION === "string" ? this.env.RELEASE_ATTESTATION : null,
+    };
+    if (podMode(this.env) === "panel") return { ...out, setup_complete: this.panel.status().setup_complete };
+    let meta;
     try {
-      meta = [...this.sql(`SELECT pod_id, protocol_version, created_at FROM pod_meta WHERE singleton = 1;`)][0];
-      facets = [
-        ...this.sql(`SELECT facet_id, facet_profile, label, visibility FROM facet_directory WHERE visibility = 'listed';`),
-      ];
+      meta = [...this.sql(`SELECT pod_id FROM pod_meta WHERE singleton = 1;`)][0];
     } catch {
       meta = undefined;
-      facets = [];
     }
+    // Legacy (path A) pods also publish the service key the genesis log is built around.
     return {
-      ok: true,
-      scope: "proof-of-concept -- launch mechanics + signed-request principal + policy-table authorization, no binding certificate, did:webvh log verified in-pod",
-      pod: meta || null,
-      facets,
+      ...out,
+      setup_complete: !!meta,
       service_key: this.serviceKey ? this.serviceKey.publicMultikey : null,
       did_log_published: this.loadDidLogText() !== null,
     };
@@ -259,7 +336,10 @@ export class PodRoot extends DurableObject {
     } catch {
       return null;
     }
-    return rows[0] ? rows[0].owner_did : null;
+    if (rows[0]) return rows[0].owner_did;
+    // Panel pod: the DID built in the browser at setup (did:webvh, root key discarded).
+    const m = this.panel ? this.panel.meta() : null;
+    return m && m.did ? m.did : null;
   }
 
   loadDidLogText() {
@@ -313,10 +393,6 @@ export class PodRoot extends DurableObject {
     for (const [name, rows] of Object.entries(dumpTables((q, ...b) => this.sql(q, ...b)))) {
       tables[name] = rows;
     }
-    const facetStub = this.env.INVENTORY_FACET.get(this.env.INVENTORY_FACET.idFromName("inventory"));
-    for (const [name, rows] of Object.entries(await facetStub.exportTables())) {
-      tables[`inventory/${name}`] = rows;
-    }
     return tables;
   }
 
@@ -330,6 +406,17 @@ export class PodRoot extends DurableObject {
 
   buildApp() {
     const app = new Hono();
+
+    // Defence in depth for the Worker's route table: the DO itself refuses a
+    // route of the other mode (a panel session can never reach a signed route
+    // and vice versa), even when called on its stub directly.
+    app.use("*", async (c, next) => {
+      const found = matchRoute(c.req.method, new URL(c.req.url).pathname);
+      if (!found || (found.route.mode !== "any" && found.route.mode !== podMode(this.env))) {
+        return c.json({ error: "not found" }, 404);
+      }
+      await next();
+    });
 
     app.get("/status", async (c) => c.json(await this.status()));
 
@@ -508,12 +595,81 @@ export class PodRoot extends DurableObject {
       return c.json({ facets, as: c.get("principalDid"), owner: c.get("isOwner") });
     });
 
+    this.buildPanelRoutes(app);
     app.notFound((c) => c.json({ error: "not found" }, 404));
     return app;
   }
 
+  facetStub(facet) {
+    return this.env.FACET_STORE.get(this.env.FACET_STORE.idFromName(facet));
+  }
+
+  // Panel + setup API (path C). Errors map to {error: code}; never a value.
+  buildPanelRoutes(app) {
+    const P = this.panel;
+    const wrap = (fn) => async (c) => {
+      try {
+        let body = {};
+        if (c.req.method === "POST") {
+          let raw;
+          try {
+            raw = new TextDecoder("utf-8", { fatal: true }).decode(await readBodyCapped(c.req.raw, 16 * 1024));
+          } catch (e) {
+            if (e instanceof BodyTooLarge) return jsonResponse({ error: "too_large" }, 413);
+            return jsonResponse({ error: "bad_json" }, 400);
+          }
+          try {
+            body = raw ? JSON.parse(raw) : {};
+          } catch {
+            return jsonResponse({ error: "bad_json" }, 400);
+          }
+          if (body === null || typeof body !== "object" || Array.isArray(body)) return jsonResponse({ error: "bad_json" }, 400);
+        }
+        return jsonResponse(await fn(c, body));
+      } catch (e) {
+        if (e instanceof PanelError || e instanceof FacetError) return jsonResponse({ error: e.code }, e.status);
+        throw e;
+      }
+    };
+    const sess = (fn) => wrap(async (c, body) => fn(c, body, await P.session(c.req.header("authorization"))));
+    const facetOf = (c) => {
+      const f = c.req.param("facet");
+      if (!isPanelFacet(f)) throw new PanelError(404, "unknown_facet");
+      return f;
+    };
+
+    app.post("/setup/api/begin", wrap((c, b) => P.setupBegin(b)));
+    app.post("/setup/api/finish", wrap((c, b) => P.setupFinish(b)));
+    app.post("/setup/api/add/begin", wrap(() => P.begin("add_passkey")));
+    app.post("/setup/api/add/assert", wrap((c, b) => P.addAssert(b.assertion)));
+    app.post("/setup/api/add/finish", wrap((c, b) => P.addFinish(b)));
+    app.post("/panel/api/unlock/begin", wrap(() => P.begin("unlock")));
+    app.post("/panel/api/unlock/finish", wrap((c, b) => P.unlockFinish(b, "frame")));
+    app.post("/panel/api/lock", sess((c, b, s) => P.lock(s)));
+    app.post("/panel/api/summary/ack", sess(() => P.ackSummary()));
+    app.get("/panel/api/passkeys", sess((c, b, s) => P.listPasskeys(s)));
+    app.post("/panel/api/passkeys/remove/begin", sess((c, b, s) => P.begin("remove_passkey", s.credentialId)));
+    app.post("/panel/api/passkeys/remove", sess((c, b, s) => P.removePasskey(s, b)));
+    app.get("/panel/api/facet/:facet", sess(async (c) => this.facetCall("read", facetOf(c))));
+    app.post("/panel/api/facet/:facet/ops", sess(async (c, b) => this.facetCall("apply", facetOf(c), b)));
+    app.post("/panel/api/facet/:facet/undo", sess(async (c, b) => this.facetCall("undo", facetOf(c), b)));
+  }
+
+  // RPC to the facet's own DO. FacetError crosses the RPC boundary as a plain
+  // Error, so the DO returns {error, status} objects instead of throwing.
+  async facetCall(method, facet, body) {
+    const r = await this.facetStub(facet).call(method, facet, body);
+    if (r && r.__error) throw new FacetError(r.status, r.__error);
+    return r;
+  }
+
   async fetch(request) {
-    return this.app.fetch(request);
+    const res = await this.app.fetch(request);
+    // Every DO answer is JSON or JSONL: never cached, never readable cross-origin.
+    const headers = new Headers(res.headers);
+    for (const [k, v] of Object.entries(BASE_HEADERS)) headers.set(k, v);
+    headers.set("cache-control", "no-store");
+    return new Response(res.body, { status: res.status, headers });
   }
 }
 
@@ -541,38 +697,36 @@ const POD_ROOT_TABLES = {
   },
 };
 
-const _NOT_FOUND = () =>
-  new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: { "content-type": "application/json" } });
-const _UNAUTHENTICATED = () =>
-  new Response(JSON.stringify({ error: "signed request required" }), { status: 401, headers: { "content-type": "application/json" } });
-
 export default {
-  // Opus architecture review, 2026-08-31: cheap-reject against KNOWN_ROUTES
-  // here, on the Worker's own much cheaper billing, before the DO hop.
-  // S1 extends it: a non-public route with no signature header at all is a
-  // 401 here, also before any DO wakes (real verification is in the DO).
+  // Cheap-reject before any Durable Object wakes (route table above).
   async fetch(request, env) {
     const url = new URL(request.url);
-    const route = KNOWN_ROUTES.find((r) => r.method === request.method && r.path === url.pathname);
-    if (!route) {
-      return _NOT_FOUND();
+    const found = matchRoute(request.method, url.pathname);
+    const mode = podMode(env);
+    if (!found || (found.route.mode !== "any" && found.route.mode !== mode)) {
+      return jsonResponse({ error: "not found" }, 404);
     }
-    if (!route.public && !request.headers.get(AUTH_HEADER_NAMES.signature)) {
-      return _UNAUTHENTICATED();
+    const { route, match } = found;
+    const hasSig = request.headers.get(AUTH_HEADER_NAMES.signature) !== null;
+    const hasBearer = request.headers.get("authorization") !== null;
+    if (hasSig && hasBearer) return jsonResponse({ error: "ambiguous_credentials" }, 400);
+    if (route.auth === "static") return serveStatic(route, match, url, env);
+    if (route.auth === "signed" && !hasSig) return jsonResponse({ error: "signed request required" }, 401);
+    if (route.auth !== "signed" && hasSig) return jsonResponse({ error: "signature not accepted here" }, 400);
+    if (route.auth === "session" && !/^Bearer [A-Za-z0-9_-]{43}$/.test(request.headers.get("authorization") || "")) {
+      return jsonResponse({ error: "locked" }, 401);
+    }
+    if (["setup", "unlock", "session"].includes(route.auth)) {
+      const bad = csrfReject(request, env);
+      if (bad) return bad;
     }
     // Cheap declared-size reject before any DO wakes; the DO re-enforces the
     // cap on the actual bytes (chunked bodies carry no Content-Length).
     const declared = request.headers.get("content-length");
     if (declared !== null && Number(declared) > (route.maxBody ?? DEFAULT_MAX_BODY_BYTES)) {
-      return new Response(JSON.stringify({ error: "request body too large" }), { status: 413, headers: { "content-type": "application/json" } });
+      return jsonResponse({ error: "request body too large" }, 413);
     }
-    if (route.binding === "INVENTORY_FACET") {
-      const id = env.INVENTORY_FACET.idFromName("inventory");
-      const stub = env.INVENTORY_FACET.get(id);
-      return stub.fetch(request);
-    }
-    const id = env.POD_ROOT.idFromName("pod-root");
-    const stub = env.POD_ROOT.get(id);
+    const stub = env.POD_ROOT.get(env.POD_ROOT.idFromName("pod-root"));
     return stub.fetch(request);
   },
 };

@@ -16,7 +16,7 @@ describe("top-level Worker entry -- KNOWN_ROUTES cheap-reject", () => {
     const res = await SELF.fetch("http://pod/status");
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.ok).toBe(true);
+    expect(body.setup_complete).toBe(true);
   });
 
   it("an unknown path 404s from the Worker itself, before any DO hop", async () => {
@@ -46,31 +46,6 @@ describe("top-level Worker entry -- KNOWN_ROUTES cheap-reject", () => {
 // TOP-LEVEL Worker entry for these paths -- inventory-facet.test.js
 // only calls env.INVENTORY_FACET stubs directly, bypassing KNOWN_ROUTES
 // entirely). This is the drift check that closes that gap.
-describe("top-level Worker entry -- INVENTORY_FACET routing", () => {
-  it("every /inventory/* route in KNOWN_ROUTES reaches InventoryFacet, not a 404 from the cheap-reject or a typo'd Hono path", async () => {
-    // The pod initializes itself on first boot from OWNER_DID; publishing
-    // the owner's root-signed DID log (through the real Worker entry) is
-    // what lets owner-signed requests authenticate.
-    await freshPodSingleton();
-    const ownerKey = await owner();
-
-    const cases = [
-      { method: "POST", path: "/inventory/items", body: { sku: "WE-SKU-1", label: "x" } },
-      { method: "GET", path: "/inventory/items" },
-      { method: "POST", path: "/inventory/items/update", body: { sku: "WE-SKU-1", label: "y" } },
-      { method: "POST", path: "/inventory/movements", body: { sku: "WE-SKU-1", kind: "receipt", quantity_delta: 1, idempotency_key: "we-k1" } },
-      { method: "GET", path: "/inventory/balances" },
-      { method: "GET", path: "/inventory/alerts/low-stock" },
-      { method: "POST", path: "/inventory/policy/grants", body: { grant_id: "we-g1", principal_did: STRANGER_DID, action: "inventory_item.read", resource: "inventory_item", effect: "allow", expires_at: null } },
-    ];
-    for (const { method, path, body } of cases) {
-      const res = await signedFetch(SELF, ownerKey, path, { method, body });
-      expect(res.status, `${method} ${path} should not 404`).not.toBe(404);
-      await res.json(); // drain the body -- see inventory-facet.test.js's eviction test for why
-    }
-  });
-});
-
 describe("top-level Worker entry -- signed-request cheap-reject and removed /setup", () => {
   it("POST /setup no longer exists -- 404 from the Worker itself", async () => {
     const res = await SELF.fetch("http://pod/setup", {
@@ -81,6 +56,16 @@ describe("top-level Worker entry -- signed-request cheap-reject and removed /set
     expect(res.status).toBe(404);
   });
 
+  it("retired inventory routes 404 from the Worker", async () => {
+    for (const path of ["/inventory/items", "/inventory/balances"]) expect((await SELF.fetch(`http://pod${path}`)).status, path).toBe(404);
+  });
+
+  it("panel routes do not exist on a legacy (OWNER_DID) pod", async () => {
+    for (const path of ["/panel", "/panel/health", "/setup", "/assets/panel.js"]) expect((await SELF.fetch(`http://pod${path}`)).status, path).toBe(404);
+    const res = await SELF.fetch("http://pod/panel/api/unlock/begin", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    expect(res.status).toBe(404);
+  });
+
   it("a protected route with no signature header is a 401 from the Worker, before any DO hop", async () => {
     const res = await SELF.fetch("http://pod/facets");
     expect(res.status).toBe(401);
@@ -88,7 +73,7 @@ describe("top-level Worker entry -- signed-request cheap-reject and removed /set
 
   it("the old X-Principal-Did header grants nothing -- even the owner's DID asserted as a bare header", async () => {
     await freshPodSingleton();
-    for (const path of ["/facets", "/inventory/items", "/export"]) {
+    for (const path of ["/facets", "/export"]) {
       const res = await SELF.fetch(`http://pod${path}`, { headers: { "X-Principal-Did": OWNER_DID } });
       expect(res.status, path).toBe(401);
     }

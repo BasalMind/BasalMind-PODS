@@ -6,6 +6,8 @@
       "version": 1,
       "status": "stable",
       "deployable": true,
+      "category": "hipaa_adjacent",
+      "home": "customer_pod",
       "json_schema_file": "health.schema.json",
       "sqlite_file": "health.sqlite.sql",
       "sha256": "26dfe41c1024d6e944a49d6b58a42340cd757ac8d05abfba7d88574bba729bf3"
@@ -15,6 +17,8 @@
       "version": 1,
       "status": "stable",
       "deployable": false,
+      "category": "money_self_reported",
+      "home": "postgres",
       "json_schema_file": "money.schema.json",
       "sqlite_file": "money.sqlite.sql",
       "sha256": "7ba61646505de219ce2d5f5e577a8948ec3e7fd5c145bbf3d2d694240d6deaf6"
@@ -24,11 +28,13 @@
       "version": 0,
       "status": "placeholder",
       "deployable": false,
+      "category": "memoir_private",
+      "home": "customer_pod",
       "json_schema_file": "memoir.schema.json",
       "sqlite_file": "memoir.sqlite.sql",
       "sha256": "bbe52ead4aad528e927c57dbdd9419f4f21cea8cc81f15b2b858548a7bd5b451"
     }
   ],
-  "spec_cid": "bafkreihpgcctsngkkmnhm7fi2n7za6a23ijbt4f2tx2smrocx76wzx3x2i",
+  "spec_cid": "bafkreicga3llt47btn6xejvipoo3tenxpgqics2jr3mfedh7dajne6huyi",
   "signature": null
 }

@@ -32,7 +32,11 @@ describe("build", () => {
     expect(memoir.lists.chapters).toBeDefined();
     expect(m.spec_cid).toBe(cidOf(Buffer.from(canonicalJson(m.facets))));
     expect(m.spec_cid).toMatch(/^bafkrei[a-z2-7]+$/);
-    expect(m.spec_cid).toBe("bafkreihpgcctsngkkmnhm7fi2n7za6a23ijbt4f2tx2smrocx76wzx3x2i");
+    // Re-pinned in pod-kernel-2: the manifest now carries each facet's category + generated home.
+    expect(m.spec_cid).toBe("bafkreicga3llt47btn6xejvipoo3tenxpgqics2jr3mfedh7dajne6huyi");
+    expect(m.facets.map((f) => [f.name, f.category, f.home])).toEqual([
+      ["health", "hipaa_adjacent", "customer_pod"], ["money", "money_self_reported", "postgres"], ["memoir", "memoir_private", "customer_pod"],
+    ]);
   });
   it("cidOf is a real CIDv1 raw sha2-256 (known vector: empty bytes)", () => {
     expect(cidOf(Buffer.alloc(0))).toBe("bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku");
@@ -70,11 +74,18 @@ describe("postMessage", () => {
   it("out messages are strict and content-free", () => {
     expect(out({ type: "saved", facet: "health", op_id: ID })).toBe(true);
     expect(out({ type: "undone", facet: "health", op_id: ID })).toBe(true);
-    expect(out({ type: "height", px: 420 })).toBe(true);
+    // Heights only from the fixed, data-independent set (FABLE-REVIEW-P2 1.3).
+    expect(out({ type: "height", px: 560 })).toBe(true);
+    expect(out({ type: "height", px: 420 })).toBe(false);
+    expect(out({ type: "ready", v: 1 })).toBe(true);
+    expect(out({ type: "state", state: "unlocked" })).toBe(true);
+    expect(out({ type: "state", state: "unlocked", count: 3 })).toBe(false);
+    expect(out({ type: "remove_leave_out", text: "peanut" })).toBe(true);
+    expect(out({ type: "add_device" })).toBe(true);
     expect(out({ type: "copy_leave_out", text: "peanut" })).toBe(true);
     expect(out({ type: "copy_leave_out", text: "x".repeat(61) })).toBe(false);
     expect(out({ type: "saved", facet: "health", op_id: ID, value: "peanut" })).toBe(false);
-    expect(out({ type: "height", px: 420, extra: 1 })).toBe(false);
+    expect(out({ type: "height", px: 560, extra: 1 })).toBe(false);
     expect(out({ type: "copy_leave_out", text: "peanut", facet: "health" })).toBe(false);
     expect(out({ type: "other" })).toBe(false);
   });
@@ -83,6 +94,10 @@ describe("postMessage", () => {
     expect(PanelIn.safeParse(m).success).toBe(true);
     expect(PanelIn.safeParse({ ...m, extra: 1 }).success).toBe(false);
     expect(PanelIn.safeParse({ ...m, text: "" }).success).toBe(false);
+    expect(PanelIn.safeParse({ type: "show", facet: "health", list: "allergies" }).success).toBe(true);
+    expect(PanelIn.safeParse({ type: "lock" }).success).toBe(true);
+    expect(PanelIn.safeParse({ type: "leave_out_result", ok: false }).success).toBe(true);
+    expect(PanelIn.safeParse({ type: "leave_out_result", ok: "yes" }).success).toBe(false);
   });
   it("op schema sanity", () => {
     expect(opSchema(health).safeParse({ op: "undo", receipt_id: ID }).success).toBe(true);

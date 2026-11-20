@@ -257,12 +257,9 @@ describe("GET /export (owner-only)", () => {
     expect((await signedFetch(stub, await mallory(OWNER_DID), "/export")).status).toBe(401);
   });
 
-  it("gives the owner a JSONL dump whose manifest sha256 per table matches a recomputation, including facet tables", async () => {
+  it("gives the owner a JSONL dump whose manifest sha256 per table matches a recomputation", async () => {
     await freshPod("pod-root");
     const pod = podRootStub("pod-root");
-    // Put a row into the real "inventory" facet that PodRoot exports.
-    const facet = env.INVENTORY_FACET.get(env.INVENTORY_FACET.idFromName("inventory"));
-    await signedFetch(facet, await owner(), "/inventory/items", { method: "POST", body: { sku: "EXP-1", label: "exported" } }).then((r) => r.arrayBuffer());
 
     const res = await signedFetch(pod, await owner(), "/export");
     expect(res.status).toBe(200);
@@ -274,19 +271,18 @@ describe("GET /export (owner-only)", () => {
     expect(manifest.format).toBe("basalmind-pod-export-v1");
 
     const tables = Object.keys(manifest.tables);
-    expect(tables).toEqual(expect.arrayContaining(["pod_meta", "facet_directory", "policy_grants", "did_log", "inventory/inventory_item", "inventory/inventory_movement"]));
-    expect(tables).not.toContain("request_nonces");
+    expect(tables).toEqual(expect.arrayContaining(["pod_meta", "facet_directory", "policy_grants", "did_log"]));
+    for (const never of ["request_nonces", "panel_sessions", "used_challenges", "consumed_grants", "grant_failures"]) expect(tables).not.toContain(never);
 
     for (const name of tables) {
       const rowLines = text.split("\n").filter((l) => l.startsWith('{"type":"row"')).filter((l) => JSON.parse(l).table === name);
       expect(rowLines.length, name).toBe(manifest.tables[name].rows);
       expect(await sha256Hex(rowLines.map((l) => l + "\n").join("")), name).toBe(manifest.tables[name].sha256);
     }
-    const item = lines.find((l) => l.table === "inventory/inventory_item");
-    expect(item.row.sku).toBe("EXP-1");
     // Tamper check: changing a row changes its table hash.
-    const tampered = text.replace("exported", "exportEd");
-    const tamperedLines = tampered.split("\n").filter((l) => l.startsWith('{"type":"row"')).filter((l) => JSON.parse(l).table === "inventory/inventory_item");
-    expect(await sha256Hex(tamperedLines.map((l) => l + "\n").join(""))).not.toBe(manifest.tables["inventory/inventory_item"].sha256);
+    const meta = lines.find((l) => l.table === "pod_meta");
+    const tampered = text.replaceAll(meta.row.pod_id, "00000000-0000-0000-0000-000000000000");
+    const tamperedLines = tampered.split("\n").filter((l) => l.startsWith('{"type":"row"')).filter((l) => JSON.parse(l).table === "pod_meta");
+    expect(await sha256Hex(tamperedLines.map((l) => l + "\n").join(""))).not.toBe(manifest.tables.pod_meta.sha256);
   });
 });

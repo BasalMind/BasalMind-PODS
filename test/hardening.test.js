@@ -122,38 +122,6 @@ describe("B3: request bodies are capped before any auth or hashing work", () => 
   });
 });
 
-describe("facet owner comes from PodRoot, never env or the facet's own storage", () => {
-  const IMPOSTOR = "did:webvh:impostor:example.com:persons:eve";
-  it("a facet whose stored owner is an impostor still treats PodRoot's owner as the owner", async () => {
-    await freshPodSingleton();
-    const facet = env.INVENTORY_FACET.get(env.INVENTORY_FACET.idFromName("hard-divergent-owner"));
-    await facet.setup(IMPOSTOR); // facet_meta now says someone else
-    const create = await signedFetch(facet, await owner(), "/inventory/items", { method: "POST", body: { sku: "D-1", label: "x" } });
-    expect(create.status).toBe(201);
-    const grant = await signedFetch(facet, await owner(), "/inventory/policy/grants", {
-      method: "POST",
-      body: { grant_id: "g", principal_did: STRANGER_DID, action: "inventory_item.read", resource: "inventory_item", effect: "allow", expires_at: null },
-    });
-    expect(grant.status).toBe(200);
-    expect((await signedFetch(facet, await stranger(), "/inventory/items")).status).toBe(200);
-    // the stranger still cannot edit policy
-    const escalate = await signedFetch(facet, await stranger(), "/inventory/policy/grants", {
-      method: "POST",
-      body: { grant_id: "g2", principal_did: STRANGER_DID, action: "inventory_item.write", resource: "inventory_item", effect: "allow", expires_at: null },
-    });
-    expect(escalate.status).toBe(403);
-  });
-
-  it("a never-set-up facet is bootstrapped with the owner PodRoot reports (not env)", async () => {
-    await freshPodSingleton();
-    const facet = env.INVENTORY_FACET.get(env.INVENTORY_FACET.idFromName("hard-lazy-facet"));
-    const res = await signedFetch(facet, await owner(), "/inventory/items");
-    expect(res.status).toBe(200);
-    const stored = await runInDurableObject(facet, (i) => [...i.sql(`SELECT owner_did FROM facet_meta;`)][0].owner_did);
-    expect(stored).toBe(OWNER_DID);
-  });
-});
-
 describe("error bodies do not leak or act as oracles", () => {
   const MARKER = "did:webvh:leak-marker-scid:example.com:persons:probe";
 
@@ -172,30 +140,4 @@ describe("error bodies do not leak or act as oracles", () => {
     }
   });
 
-  it("a non-owner gets one uniform 409 for insufficient stock, key reuse, and unknown sku; the owner keeps the detail", async () => {
-    await freshPodSingleton();
-    const facet = env.INVENTORY_FACET.get(env.INVENTORY_FACET.idFromName("hard-uniform-conflict"));
-    await facet.setup(OWNER_DID);
-    const o = await owner(), s = await stranger();
-    await (await signedFetch(facet, o, "/inventory/items", { method: "POST", body: { sku: "U-1", label: "u" } })).arrayBuffer();
-    await (await signedFetch(facet, o, "/inventory/movements", { method: "POST", body: { sku: "U-1", kind: "receipt", quantity_delta: 2, idempotency_key: "owner-key-1" } })).arrayBuffer();
-    const grant = await signedFetch(facet, o, "/inventory/policy/grants", {
-      method: "POST",
-      body: { grant_id: "mv", principal_did: STRANGER_DID, action: "inventory_movement.write", resource: "inventory_movement", effect: "allow", expires_at: null },
-    });
-    await grant.arrayBuffer();
-    const mv = (who, body) => signedFetch(facet, who, "/inventory/movements", { method: "POST", body: { kind: "sale", quantity_delta: -1, ...body } });
-
-    const overdraw = await mv(s, { sku: "U-1", quantity_delta: -99, idempotency_key: "s-1" });
-    const keyReuse = await mv(s, { sku: "U-1", idempotency_key: "owner-key-1" }); // key owned by the owner's receipt
-    const unknownSku = await mv(s, { sku: "NOPE", idempotency_key: "s-2" });
-    const texts = [await overdraw.text(), await keyReuse.text(), await unknownSku.text()];
-    expect([overdraw.status, keyReuse.status, unknownSku.status]).toEqual([409, 409, 409]);
-    expect(new Set(texts).size).toBe(1);
-    expect(texts[0]).not.toMatch(/stock|idempotency|sku|owner-key-1|NOPE/i);
-
-    const ownerOverdraw = await mv(o, { sku: "U-1", quantity_delta: -99, idempotency_key: "o-2" });
-    expect(ownerOverdraw.status).toBe(409);
-    expect((await ownerOverdraw.json()).error).toMatch(/insufficient stock/);
-  });
 });
