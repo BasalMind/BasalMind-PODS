@@ -1,0 +1,90 @@
+name: Release (build + CI signature)
+
+# Pod release signing, step 1 of 2 (Jonah, 2026-11-21). Builds the Worker bundle and the
+# release manifest from main, and adds the CI signature (key id ci-1) with the Cloud KMS key
+# basalmind-pod-release/pod-release-ci. Google lets ONLY this repo's runs on refs/heads/main use
+# that key (workload identity pool "github", provider "pods-main"); there is no key file anywhere.
+# Step 2 is the hardware signature (hw-1) on Jonah's YubiKey: release/yubikey_sign.py.
+#
+# This repo is PUBLIC. Rules for this file:
+#   - manual trigger only (workflow_dispatch), and the job refuses any ref but main;
+#   - never pull_request_target, never code from a pull request;
+#   - every action is pinned to a commit;
+#   - the release number reaches the shell through env, never interpolated into a command.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Release number, MAJOR.MINOR.PATCH"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-and-ci-sign:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      RELEASE: ${{ inputs.release }}
+      KMS_KEY_VERSION: projects/basalmind-registry-authority/locations/nam4/keyRings/basalmind-pod-release/cryptoKeys/pod-release-ci/cryptoKeyVersions/1
+      CI_PUBKEY: 125b7a05a4bcf0469e0dd4db46a3526b7eb8e31fbf4536dea1224ae3724c1bef
+    steps:
+      - name: Release number is MAJOR.MINOR.PATCH
+        run: |
+          echo "$RELEASE" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "bad release number"; exit 1; }
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generated files are current
+        run: |
+          npm run schema:check
+          npm run assets:check
+
+      - name: Tests
+        run: npm test
+
+      - name: Bundle (no deploy)
+        run: npx wrangler deploy --dry-run --outdir out/bundle
+
+      - name: Manifest
+        run: node release/release.mjs build --release "$RELEASE" --bundle out/bundle --out out/manifest.json
+
+      - name: Google sign-in (GitHub OIDC, main only)
+        id: auth
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: projects/606262186371/locations/global/workloadIdentityPools/github/providers/pods-main
+          service_account: pod-release-ci-signer@basalmind-registry-authority.iam.gserviceaccount.com
+          token_format: access_token
+          create_credentials_file: false
+
+      - name: CI signature (ci-1), verified before it is written
+        env:
+          KMS_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          node release/release.mjs kms-sign --manifest out/manifest.json --key-id ci-1 \
+            --key-version "$KMS_KEY_VERSION" --expect-pubkey "$CI_PUBKEY"
+          node release/release.mjs payload --manifest out/manifest.json --out out/payload.bin
+          git rev-parse HEAD > out/commit.txt
+
+      - name: Upload the CI-signed release
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pod-release-${{ inputs.release }}
+          path: out/
+          if-no-files-found: error
