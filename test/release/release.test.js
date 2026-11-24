@@ -69,8 +69,13 @@ describe("two-person signing", () => {
     const sneaky = { ...two, migrations: [...two.migrations, { tag: "v9", deleted_classes: ["FacetStore"] }] };
     expect((await verifyRelease(sneaky, pinned)).ok).toBe(false);
   });
-  it("the production key set is empty, so verification fails closed", async () => {
-    expect(loadPinnedKeys()).toEqual({});
+  it("the production key set is exactly ci-1 (KMS) + hw-1 (YubiKey), two distinct keys; test signers are not accepted", async () => {
+    const pinned = loadPinnedKeys();
+    expect(pinned).toEqual({
+      "ci-1": "125b7a05a4bcf0469e0dd4db46a3526b7eb8e31fbf4536dea1224ae3724c1bef",
+      "hw-1": "6f463bb542dc8754ad0d13df6d4c62dca908e05aa5125d26988e0b5b0798ac29",
+    });
+    expect(new Set(Object.values(pinned)).size).toBe(2);
     const two = await addSignature(await addSignature(base, localSigner("signer-a", SEED_A)), localSigner("signer-b", SEED_B));
     expect((await verifyRelease(two, loadPinnedKeys())).ok).toBe(false);
   });
