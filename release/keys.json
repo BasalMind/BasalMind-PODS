@@ -1,4 +1,7 @@
 {
-  "$comment": "Pinned release public keys (ed25519, hex) by key id. EMPTY on purpose: no production release key exists yet, so every release verification fails closed. Two keys held by two different people are added here (by PR) once they are created in GCP KMS. Test keys live only under test/.",
-  "keys": {}
+  "$comment": "Pinned release public keys (ed25519, hex) by key id. A release needs valid signatures from BOTH: ci-1 = GCP KMS basalmind-pod-release/pod-release-ci v1 (only the release workflow on main can use it); hw-1 = Jonah's YubiKey 5C NFC, PIV slot 9c, generated on the device (PIN + touch). Two distinct keys, one person (option 1, 2026-11-21). Pinned 2026-11-24 after a dry run of release 0.0.1 verified [ci-1, hw-1]. Must stay identical to core BasalTribe/basaltribe/pod_release_pins.json. To replace a lost key, change both files by PR. Test keys live only under test/.",
+  "keys": {
+    "ci-1": "125b7a05a4bcf0469e0dd4db46a3526b7eb8e31fbf4536dea1224ae3724c1bef",
+    "hw-1": "6f463bb542dc8754ad0d13df6d4c62dca908e05aa5125d26988e0b5b0798ac29"
+  }
 }
